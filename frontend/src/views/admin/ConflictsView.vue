@@ -49,6 +49,18 @@
 
       <Card>
         <CardHeader>
+          <CardTitle>Real-Time Monitoring Dashboard</CardTitle>
+          <CardDescription>
+            Live conflict detection and system performance monitoring
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <RealTimeConflictDashboard />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle>Conflict Management</CardTitle>
           <CardDescription>
             Identify, analyze, and resolve scheduling conflicts
@@ -73,6 +85,7 @@ import CardContent from '@/components/ui/CardContent.vue'
 import Button from '@/components/ui/Button.vue'
 import { AlertTriangle, Filter, CheckCircle } from 'lucide-vue-next'
 import ConflictList from '@/components/conflicts/ConflictList.vue'
+import RealTimeConflictDashboard from '@/components/conflicts/RealTimeConflictDashboard.vue'
 
 const conflictStats = ref({
   active: 12,

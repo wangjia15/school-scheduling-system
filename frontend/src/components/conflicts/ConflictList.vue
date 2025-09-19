@@ -29,6 +29,15 @@
           <RefreshCw class="h-4 w-4 mr-2" />
           Refresh
         </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          @click="toggleRealTimeUpdates"
+          :class="{ 'bg-green-50 border-green-200': realTimeUpdates }"
+        >
+          <div class="w-2 h-2 rounded-full mr-2" :class="realTimeUpdates ? 'bg-green-500' : 'bg-gray-400'"></div>
+          {{ realTimeUpdates ? 'Live' : 'Offline' }}
+        </Button>
         <Button size="sm" @click="resolveSelected" :disabled="!selectedConflicts.length">
           <CheckCircle class="h-4 w-4 mr-2" />
           Resolve Selected ({{ selectedConflicts.length }})
@@ -315,6 +324,106 @@ const statusVariant = (status: string) => {
       return 'default'
     default:
       return 'outline'
+  }
+}
+
+// WebSocket event handlers
+const handleConflictDetected = (message: ConflictDetectedMessage) => {
+  console.log('New conflict detected via WebSocket:', message)
+
+  // Add the new conflict to the list
+  const newConflict: Conflict = {
+    id: message.id.toString(),
+    type: message.conflictType.replace(/_/g, ' '),
+    severity: message.severity.toLowerCase(),
+    status: message.resolutionStatus.toLowerCase().replace('_', '-'),
+    description: message.description,
+    teacher: extractTeacherFromDescription(message.description),
+    time: extractTimeFromDescription(message.description),
+    resolution: generateResolutionSuggestion(message.conflictType)
+  }
+
+  // Add to conflicts array if not already exists
+  const existingIndex = conflicts.value.findIndex(c => c.id === newConflict.id)
+  if (existingIndex === -1) {
+    conflicts.value.unshift(newConflict) // Add to top of list
+  }
+
+  // Show notification
+  toast.warning(`New ${message.severity.toLowerCase()} conflict detected: ${message.conflictType.replace(/_/g, ' ')}`)
+}
+
+const handleConflictStats = (message: ConflictStatsMessage) => {
+  console.log('Conflict stats updated:', message)
+  // Update local conflict stats if needed
+  // This could update parent component stats
+}
+
+const handleConflictResolved = (message: any) => {
+  console.log('Conflict resolved via WebSocket:', message)
+
+  // Update conflict status in the list
+  const conflictIndex = conflicts.value.findIndex(c => c.id === message.conflictId.toString())
+  if (conflictIndex !== -1) {
+    conflicts.value[conflictIndex].status = 'resolved'
+    toast.success(`Conflict ${message.conflictId} has been resolved`)
+  }
+}
+
+// Helper functions
+const extractTeacherFromDescription = (description: string): string => {
+  const teacherMatch = description.match(/Teacher ([^.]+)/)
+  return teacherMatch ? teacherMatch[1] : 'Unknown'
+}
+
+const extractTimeFromDescription = (description: string): string => {
+  const timeMatch = description.match(/between ([^.]+)/)
+  return timeMatch ? timeMatch[1] : 'Unknown time'
+}
+
+const generateResolutionSuggestion = (conflictType: string): string => {
+  switch (conflictType) {
+    case 'TEACHER_DOUBLE_BOOKING':
+      return 'Reschedule one of the conflicting classes or assign a different teacher'
+    case 'CLASSROOM_DOUBLE_BOOKING':
+      return 'Move one of the classes to a different classroom or time slot'
+    case 'CAPACITY_EXCEEDED':
+      return 'Move to larger classroom or split into multiple sections'
+    case 'PREREQUISITE_NOT_MET':
+      return 'Remove student from course or ensure prerequisite completion'
+    default:
+      return 'Review scheduling constraints and adjust accordingly'
+  }
+}
+
+// Lifecycle hooks
+onMounted(() => {
+  // Subscribe to WebSocket events
+  websocketService.subscribeToConflictDetected(handleConflictDetected)
+  websocketService.subscribeToConflictStats(handleConflictStats)
+  websocketService.subscribeToConflictResolved(handleConflictResolved)
+
+  // Request conflict updates
+  if (realTimeUpdates.value) {
+    websocketService.requestConflictUpdates()
+  }
+
+  console.log('ConflictList component mounted and subscribed to WebSocket events')
+})
+
+onUnmounted(() => {
+  // Cleanup WebSocket subscriptions would be handled automatically by the service
+  console.log('ConflictList component unmounted')
+})
+
+// Toggle real-time updates
+const toggleRealTimeUpdates = () => {
+  realTimeUpdates.value = !realTimeUpdates.value
+  if (realTimeUpdates.value) {
+    websocketService.requestConflictUpdates()
+    toast.info('Real-time updates enabled')
+  } else {
+    toast.info('Real-time updates disabled')
   }
 }
 </script>
