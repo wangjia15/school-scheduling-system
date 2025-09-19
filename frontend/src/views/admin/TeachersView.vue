@@ -76,18 +76,26 @@
         </Card>
       </div>
 
-      <!-- Filters and Search -->
+      <!-- Advanced Filters and Search -->
       <Card>
         <CardHeader>
-          <CardTitle>Search & Filter</CardTitle>
+          <div class="flex items-center justify-between">
+            <CardTitle>Advanced Search & Filter</CardTitle>
+            <Button variant="ghost" size="sm" @click="showAdvancedFilters = !showAdvancedFilters">
+              <Filter v-if="!showAdvancedFilters" class="h-4 w-4 mr-2" />
+              <ChevronUp v-else class="h-4 w-4 mr-2" />
+              {{ showAdvancedFilters ? 'Hide' : 'Show' }} Advanced
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
-          <div class="flex flex-col md:flex-row gap-4">
+          <!-- Basic Search -->
+          <div class="flex flex-col md:flex-row gap-4 mb-4">
             <div class="relative flex-1">
               <Search class="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
                 v-model="searchQuery"
-                placeholder="Search teachers by name, email, or employee ID..."
+                placeholder="Search teachers by name, email, employee ID, or specializations..."
                 class="pl-10"
                 @keyup.enter="searchTeachers"
               />
@@ -110,6 +118,110 @@
               <RotateCcw class="h-4 w-4 mr-2" />
               Reset
             </Button>
+          </div>
+
+          <!-- Advanced Filters -->
+          <div v-if="showAdvancedFilters" class="space-y-4 pt-4 border-t">
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              <!-- Status Filter -->
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Status</label>
+                <Select v-model="selectedStatus" @change="searchTeachers">
+                  <option value="">All Status</option>
+                  <option value="active">Active</option>
+                  <option value="inactive">Inactive</option>
+                </Select>
+              </div>
+
+              <!-- Specialization Filter -->
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Specialization</label>
+                <Input
+                  v-model="specializationFilter"
+                  placeholder="Subject code (e.g., CS101)"
+                  @keyup.enter="searchTeachers"
+                />
+              </div>
+
+              <!-- Workload Range -->
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Min Weekly Hours</label>
+                <Input
+                  v-model.number="minWorkload"
+                  type="number"
+                  min="1"
+                  max="60"
+                  placeholder="Min hours"
+                  @keyup.enter="searchTeachers"
+                />
+              </div>
+
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Max Weekly Hours</label>
+                <Input
+                  v-model.number="maxWorkload"
+                  type="number"
+                  min="1"
+                  max="60"
+                  placeholder="Max hours"
+                  @keyup.enter="searchTeachers"
+                />
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <!-- Availability Filter -->
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Available On</label>
+                <Select v-model="availableDay" @change="searchTeachers">
+                  <option value="">Any Day</option>
+                  <option value="MONDAY">Monday</option>
+                  <option value="TUESDAY">Tuesday</option>
+                  <option value="WEDNESDAY">Wednesday</option>
+                  <option value="THURSDAY">Thursday</option>
+                  <option value="FRIDAY">Friday</option>
+                  <option value="SATURDAY">Saturday</option>
+                  <option value="SUNDAY">Sunday</option>
+                </Select>
+              </div>
+
+              <!-- Experience Level -->
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Experience Level</label>
+                <Select v-model="experienceLevel" @change="searchTeachers">
+                  <option value="">Any Level</option>
+                  <option value="BEGINNER">Beginner</option>
+                  <option value="INTERMEDIATE">Intermediate</option>
+                  <option value="ADVANCED">Advanced</option>
+                  <option value="EXPERT">Expert</option>
+                </Select>
+              </div>
+
+              <!-- Certification Filter -->
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Certification</label>
+                <Select v-model="certificationFilter" @change="searchTeachers">
+                  <option value="">Any</option>
+                  <option value="certified">Certified Only</option>
+                  <option value="uncertified">Uncertified Only</option>
+                </Select>
+              </div>
+            </div>
+
+            <!-- Quick Filter Presets -->
+            <div class="flex flex-wrap gap-2 pt-2">
+              <span class="text-sm text-gray-600">Quick Filters:</span>
+              <Button
+                v-for="preset in quickFilterPresets"
+                :key="preset.key"
+                variant="outline"
+                size="sm"
+                @click="applyQuickFilter(preset)"
+                :class="{ 'bg-primary text-primary-foreground': isQuickFilterActive(preset) }"
+              >
+                {{ preset.label }}
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -337,7 +449,8 @@ import {
   Clock,
   CalendarCheck,
   CalendarDays,
-  Power
+  Power,
+  ChevronUp
 } from 'lucide-vue-next'
 import teacherService, { type Teacher, type TeacherFilters } from '@/services/teacherService'
 import { useAuthStore } from '@/stores/auth'
@@ -356,6 +469,16 @@ const selectedTitle = ref('')
 const selectedTeacher = ref<Teacher | null>(null)
 const showAddTeacherModal = ref(false)
 const showTeacherDetailModal = ref(false)
+const showAdvancedFilters = ref(false)
+
+// Advanced Filters
+const selectedStatus = ref('')
+const specializationFilter = ref('')
+const minWorkload = ref<number | null>(null)
+const maxWorkload = ref<number | null>(null)
+const availableDay = ref('')
+const experienceLevel = ref('')
+const certificationFilter = ref('')
 
 // Pagination
 const pagination = ref({
@@ -373,6 +496,15 @@ const stats = ref({
   averageWorkload: 0,
   availableSlots: 0
 })
+
+// Quick Filter Presets
+const quickFilterPresets = [
+  { key: 'highWorkload', label: 'High Workload', title: 'ASSOCIATE_PROFESSOR', minWorkload: 30 },
+  { key: 'availableNow', label: 'Available Now', availableDay: 'MONDAY' },
+  { key: 'experts', label: 'Expert Teachers', experienceLevel: 'EXPERT' },
+  { key: 'certified', label: 'Certified Only', certificationFilter: 'certified' },
+  { key: 'professors', label: 'Professors Only', title: 'PROFESSOR' }
+]
 
 // Table headers
 const tableHeaders = [
@@ -472,6 +604,13 @@ const resetFilters = () => {
   searchQuery.value = ''
   selectedDepartment.value = ''
   selectedTitle.value = ''
+  selectedStatus.value = ''
+  specializationFilter.value = ''
+  minWorkload.value = null
+  maxWorkload.value = null
+  availableDay.value = ''
+  experienceLevel.value = ''
+  certificationFilter.value = ''
   pagination.value.page = 0
   loadTeachers()
 }
@@ -541,6 +680,27 @@ const handleTeacherSave = async (teacherData: any) => {
     toast.error('Failed to save teacher')
     console.error('Error saving teacher:', error)
   }
+}
+
+// Quick Filter Methods
+const applyQuickFilter = (preset: any) => {
+  selectedTitle.value = preset.title || ''
+  minWorkload.value = preset.minWorkload || null
+  maxWorkload.value = preset.maxWorkload || null
+  availableDay.value = preset.availableDay || ''
+  experienceLevel.value = preset.experienceLevel || ''
+  certificationFilter.value = preset.certificationFilter || ''
+  searchTeachers()
+}
+
+const isQuickFilterActive = (preset: any) => {
+  return (
+    (preset.title && selectedTitle.value === preset.title) ||
+    (preset.minWorkload && minWorkload.value === preset.minWorkload) ||
+    (preset.availableDay && availableDay.value === preset.availableDay) ||
+    (preset.experienceLevel && experienceLevel.value === preset.experienceLevel) ||
+    (preset.certificationFilter && certificationFilter.value === preset.certificationFilter)
+  )
 }
 
 // Utility functions

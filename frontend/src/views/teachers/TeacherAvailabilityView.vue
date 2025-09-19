@@ -130,9 +130,18 @@
       </Card>
     </div>
 
-    <!-- Add/Edit Availability Modal -->
+    <!-- Add Availability Modal -->
     <AvailabilityFormModal
-      v-if="showAddModal || showEditModal"
+      v-model:open="showAddModal"
+      :teacher-id="teacherId"
+      :existing-availability="availability"
+      @close="closeModals"
+      @save="handleAvailabilitySave"
+    />
+
+    <!-- Edit Availability Modal -->
+    <AvailabilityFormModal
+      v-model:open="showEditModal"
       :teacher-id="teacherId"
       :availability="selectedAvailability"
       :existing-availability="availability"

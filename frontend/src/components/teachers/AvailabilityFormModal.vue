@@ -1,13 +1,18 @@
 <template>
-  <div class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full flex items-center justify-center z-50">
-    <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4">
-      <div class="px-6 py-4 border-b border-gray-200">
-        <h3 class="text-lg font-medium text-gray-900">
-          {{ availability ? 'Edit Availability' : 'Add Availability' }}
-        </h3>
-      </div>
-
-      <form @submit.prevent="handleSubmit" class="px-6 py-4 space-y-4">
+  <div v-if="open" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+    <Card class="w-full max-w-md max-h-[90vh] overflow-y-auto">
+      <CardHeader>
+        <div class="flex items-center justify-between">
+          <CardTitle>{{ availability ? 'Edit Availability' : 'Add Availability' }}</CardTitle>
+          <Button variant="ghost" size="icon" @click="$emit('update:open', false)">
+            <X class="h-4 w-4" />
+          </Button>
+        </div>
+        <CardDescription>
+          {{ availability ? 'Update teacher availability slot' : 'Create new availability slot' }}
+        </CardDescription>
+      <CardContent>
+      <form @submit.prevent="handleSubmit" class="space-y-4">
         <!-- Day of Week -->
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">Day of Week</label>
@@ -117,36 +122,47 @@
         <!-- Error Message -->
         <div v-if="error" class="text-red-600 text-sm">{{ error }}</div>
 
-        <!-- Actions -->
-        <div class="flex justify-end gap-3 pt-4">
+        <!-- Form Actions -->
+        <div class="flex items-center justify-end gap-3 pt-4 border-t">
           <Button type="button" variant="outline" @click="$emit('close')">
             Cancel
           </Button>
           <Button type="submit" :disabled="loading">
-            {{ loading ? 'Saving...' : (availability ? 'Update' : 'Add') }}
+            <Save v-if="!loading" class="h-4 w-4 mr-2" />
+            <Loader v-else class="h-4 w-4 mr-2 animate-spin" />
+            {{ availability ? 'Update Availability' : 'Add Availability' }}
           </Button>
         </div>
       </form>
-    </div>
+    </CardContent>
+    </Card>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, watch } from 'vue'
+import Card from '@/components/ui/Card.vue'
+import CardHeader from '@/components/ui/CardHeader.vue'
+import CardTitle from '@/components/ui/CardTitle.vue'
+import CardDescription from '@/components/ui/CardDescription.vue'
+import CardContent from '@/components/ui/CardContent.vue'
 import Button from '@/components/ui/Button.vue'
 import Input from '@/components/ui/Input.vue'
 import Select from '@/components/ui/Select.vue'
+import { X, Save, Loader } from 'lucide-vue-next'
 import teacherService, { type TeacherAvailability, type TeacherAvailabilityRequest } from '@/services/teacherService'
 
 interface Props {
+  open: boolean
   teacherId: number
   availability?: TeacherAvailability | null
   existingAvailability: TeacherAvailability[]
 }
 
 interface Emits {
-  (e: 'close'): void
-  (e: 'save'): void
+  'update:open': [value: boolean]
+  'close': []
+  'save': []
 }
 
 const props = defineProps<Props>()
