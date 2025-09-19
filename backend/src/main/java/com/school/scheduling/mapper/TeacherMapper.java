@@ -78,6 +78,10 @@ public interface TeacherMapper {
     @ResultMap("teacherResultMap")
     List<Teacher> findAll();
 
+    @Select("SELECT * FROM teachers WHERE deleted_at IS NULL AND is_active = true ORDER BY created_at DESC")
+    @ResultMap("teacherResultMap")
+    List<Teacher> findAllActive();
+
     @Select("SELECT COUNT(*) FROM teachers WHERE deleted_at IS NULL")
     long countAll();
 

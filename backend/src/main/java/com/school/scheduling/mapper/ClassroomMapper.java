@@ -89,6 +89,20 @@ public interface ClassroomMapper {
     @ResultMap("classroomResultMap")
     List<Classroom> findAll();
 
+    @Select("SELECT * FROM classrooms WHERE deleted_at IS NULL AND is_available = true ORDER BY building_code, room_number")
+    @ResultMap("classroomResultMap")
+    List<Classroom> findAllActive();
+
+    @Select("<script>" +
+            "SELECT * FROM classrooms WHERE id IN " +
+            "<foreach collection='ids' item='id' open='(' separator=',' close=')'>" +
+            "#{id}" +
+            "</foreach>" +
+            "AND deleted_at IS NULL" +
+            "</script>")
+    @ResultMap("classroomResultMap")
+    List<Classroom> findByIds(@Param("ids") List<Long> ids);
+
     @Select("SELECT COUNT(*) FROM classrooms WHERE deleted_at IS NULL")
     long countAll();
 

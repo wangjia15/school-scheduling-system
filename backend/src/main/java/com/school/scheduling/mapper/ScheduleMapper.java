@@ -143,6 +143,17 @@ public interface ScheduleMapper {
     @ResultMap("scheduleResultMap")
     List<Schedule> findCurrentSemesterTeacherSchedules(@Param("teacherId") Long teacherId);
 
+    @Select("SELECT s.* FROM schedules s " +
+            "JOIN course_offerings co ON s.course_offering_id = co.id " +
+            "WHERE co.semester_id = #{semesterId} " +
+            "AND s.deleted_at IS NULL AND co.deleted_at IS NULL " +
+            "ORDER BY s.schedule_date, s.time_slot_id")
+    @ResultMap("scheduleResultMap")
+    List<Schedule> findBySemesterId(@Param("semesterId") Long semesterId);
+
+    @Select("SELECT * FROM schedule_conflicts WHERE id = #{id}")
+    Optional<ScheduleConflict> findConflictById(@Param("id") Long id);
+
     // Classroom Usage
     @Select("SELECT * FROM schedules WHERE classroom_id = #{classroomId} " +
             "AND schedule_date BETWEEN #{startDate} AND #{endDate} " +

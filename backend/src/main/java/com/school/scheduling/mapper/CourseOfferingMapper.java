@@ -113,4 +113,14 @@ public interface CourseOfferingMapper {
     @Select("SELECT SUM(current_enrollment) FROM course_offerings WHERE semester_id = #{semesterId} " +
             "AND deleted_at IS NULL")
     Integer getTotalEnrollmentBySemester(@Param("semesterId") Long semesterId);
+
+    @Select("<script>" +
+            "SELECT * FROM course_offerings WHERE id IN " +
+            "<foreach collection='ids' item='id' open='(' separator=',' close=')'>" +
+            "#{id}" +
+            "</foreach>" +
+            "AND deleted_at IS NULL" +
+            "</script>")
+    @ResultMap("courseOfferingResultMap")
+    List<CourseOffering> findByIds(@Param("ids") List<Long> ids);
 }

@@ -110,6 +110,20 @@ public interface TimeSlotMapper {
     @ResultMap("timeSlotResultMap")
     List<TimeSlot> findAll();
 
+    @Select("SELECT * FROM time_slots WHERE deleted_at IS NULL AND is_active = true ORDER BY day_of_week, start_time")
+    @ResultMap("timeSlotResultMap")
+    List<TimeSlot> findAllActive();
+
+    @Select("<script>" +
+            "SELECT * FROM time_slots WHERE id IN " +
+            "<foreach collection='ids' item='id' open='(' separator=',' close=')'>" +
+            "#{id}" +
+            "</foreach>" +
+            "AND deleted_at IS NULL" +
+            "</script>")
+    @ResultMap("timeSlotResultMap")
+    List<TimeSlot> findByIds(@Param("ids") List<Long> ids);
+
     @Select("SELECT COUNT(*) FROM time_slots WHERE day_of_week = #{dayOfWeek} AND deleted_at IS NULL")
     int countByDayOfWeek(@Param("dayOfWeek") String dayOfWeek);
 
