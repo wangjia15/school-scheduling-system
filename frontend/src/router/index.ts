@@ -22,6 +22,54 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
+      path: '/admin',
+      name: 'admin-dashboard',
+      component: () => import('@/views/admin/AdminDashboardView.vue'),
+      meta: { requiresAuth: true, requiresAdmin: true }
+    },
+    {
+      path: '/admin/scheduling',
+      name: 'admin-scheduling',
+      component: () => import('@/views/admin/SchedulingView.vue'),
+      meta: { requiresAuth: true, requiresAdmin: true }
+    },
+    {
+      path: '/admin/conflicts',
+      name: 'admin-conflicts',
+      component: () => import('@/views/admin/ConflictsView.vue'),
+      meta: { requiresAuth: true, requiresAdmin: true }
+    },
+    {
+      path: '/admin/teachers',
+      name: 'admin-teachers',
+      component: () => import('@/views/admin/TeachersView.vue'),
+      meta: { requiresAuth: true, requiresAdmin: true }
+    },
+    {
+      path: '/admin/courses',
+      name: 'admin-courses',
+      component: () => import('@/views/admin/CoursesView.vue'),
+      meta: { requiresAuth: true, requiresAdmin: true }
+    },
+    {
+      path: '/admin/classrooms',
+      name: 'admin-classrooms',
+      component: () => import('@/views/admin/ClassroomsView.vue'),
+      meta: { requiresAuth: true, requiresAdmin: true }
+    },
+    {
+      path: '/admin/reports',
+      name: 'admin-reports',
+      component: () => import('@/views/admin/ReportsView.vue'),
+      meta: { requiresAuth: true, requiresAdmin: true }
+    },
+    {
+      path: '/admin/settings',
+      name: 'admin-settings',
+      component: () => import('@/views/admin/SettingsView.vue'),
+      meta: { requiresAuth: true, requiresAdmin: true }
+    },
+    {
       path: '/teachers',
       name: 'teachers',
       component: () => import('@/views/teachers/TeacherListView.vue'),
@@ -60,6 +108,8 @@ router.beforeEach((to, from, next) => {
     next('/login')
   } else if (to.path === '/login' && authStore.isAuthenticated) {
     next('/')
+  } else if (to.meta.requiresAdmin && (!authStore.user || authStore.user.role !== 'admin')) {
+    next('/dashboard') // Redirect non-admin users to regular dashboard
   } else {
     next()
   }
