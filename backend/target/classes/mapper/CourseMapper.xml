@@ -1,0 +1,388 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+    "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.school.scheduling.mapper.CourseMapper">
+
+    <!-- Result Maps -->
+    <resultMap id="courseWithDetailsResultMap" type="com.school.scheduling.domain.Course">
+        <id property="id" column="id"/>
+        <result property="courseCode" column="course_code"/>
+        <result property="title" column="title"/>
+        <result property="description" column="description"/>
+        <result property="departmentId" column="department_id"/>
+        <result property="credits" column="credits"/>
+        <result property="contactHoursPerWeek" column="contact_hours_per_week"/>
+        <result property="theoryHours" column="theory_hours"/>
+        <result property="labHours" column="lab_hours"/>
+        <result property="level" column="level"/>
+        <result property="isActive" column="is_active"/>
+        <result property="maxStudents" column="max_students"/>
+        <result property="minStudents" column="min_students"/>
+        <result property="requiresLab" column="requires_lab"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+        <result property="deletedAt" column="deleted_at"/>
+
+        <!-- Association with Department -->
+        <association property="department" javaType="com.school.scheduling.domain.Department">
+            <id property="id" column="department_id"/>
+            <result property="name" column="department_name"/>
+            <result property="code" column="department_code"/>
+        </association>
+
+        <!-- Collection with Prerequisites -->
+        <collection property="prerequisites" ofType="com.school.scheduling.domain.CoursePrerequisite">
+            <id property="id" column="prereq_id"/>
+            <result property="courseId" column="course_id"/>
+            <result property="prerequisiteCourseId" column="prerequisite_course_id"/>
+            <result property="isMandatory" column="is_mandatory"/>
+            <result property="minimumGrade" column="minimum_grade"/>
+            <result property="createdAt" column="prereq_created_at"/>
+        </collection>
+
+        <!-- Collection with Course Offerings -->
+        <collection property="offerings" ofType="com.school.scheduling.domain.CourseOffering">
+            <id property="id" column="offering_id"/>
+            <result property="courseId" column="course_id"/>
+            <result property="semesterId" column="semester_id"/>
+            <result property="sectionNumber" column="section_number"/>
+            <result property="teacherId" column="teacher_id"/>
+            <result property="maxEnrollment" column="max_enrollment"/>
+            <result property="currentEnrollment" column="current_enrollment"/>
+            <result property="scheduleType" column="schedule_type"/>
+            <result property="isOpen" column="is_open"/>
+            <result property="syllabusUrl" column="syllabus_url"/>
+            <result property="createdAt" column="offering_created_at"/>
+            <result property="updatedAt" column="offering_updated_at"/>
+        </collection>
+    </resultMap>
+
+    <!-- Result Map for Prerequisites with Course Details -->
+    <resultMap id="prerequisiteWithCourseDetailsResultMap" type="com.school.scheduling.domain.CoursePrerequisite">
+        <id property="id" column="prereq_id"/>
+        <result property="courseId" column="course_id"/>
+        <result property="prerequisiteCourseId" column="prerequisite_course_id"/>
+        <result property="isMandatory" column="is_mandatory"/>
+        <result property="minimumGrade" column="minimum_grade"/>
+        <result property="createdAt" column="prereq_created_at"/>
+
+        <!-- Association with Prerequisite Course -->
+        <association property="prerequisiteCourse" javaType="com.school.scheduling.domain.Course">
+            <id property="id" column="prereq_course_id"/>
+            <result property="courseCode" column="prereq_course_code"/>
+            <result property="title" column="prereq_title"/>
+            <result property="credits" column="prereq_credits"/>
+            <result property="level" column="prereq_level"/>
+        </association>
+    </resultMap>
+
+    <!-- Base Columns -->
+    <sql id="courseColumns">
+        c.id, c.course_code, c.title, c.description, c.department_id, c.credits,
+        c.contact_hours_per_week, c.theory_hours, c.lab_hours, c.level, c.is_active,
+        c.max_students, c.min_students, c.requires_lab, c.created_at, c.updated_at, c.deleted_at
+    </sql>
+
+    <sql id="courseWithDepartmentColumns">
+        c.id, c.course_code, c.title, c.description, c.department_id, c.credits,
+        c.contact_hours_per_week, c.theory_hours, c.lab_hours, c.level, c.is_active,
+        c.max_students, c.min_students, c.requires_lab, c.created_at, c.updated_at, c.deleted_at,
+        d.name as department_name, d.code as department_code
+    </sql>
+
+    <!-- Complex Queries with Full Details -->
+    <select id="findByIdWithDetails" resultMap="courseWithDetailsResultMap">
+        SELECT
+            <include refid="courseWithDepartmentColumns"/>,
+            prereq.id as prereq_id, prereq.course_id, prereq.prerequisite_course_id,
+            prereq.is_mandatory, prereq.minimum_grade, prereq.created_at as prereq_created_at,
+            offering.id as offering_id, offering.semester_id, offering.section_number,
+            offering.teacher_id, offering.max_enrollment, offering.current_enrollment,
+            offering.schedule_type, offering.is_open, offering.syllabus_url,
+            offering.created_at as offering_created_at, offering.updated_at as offering_updated_at
+        FROM courses c
+        LEFT JOIN departments d ON c.department_id = d.id
+        LEFT JOIN course_prerequisites prereq ON c.id = prereq.course_id AND prereq.deleted_at IS NULL
+        LEFT JOIN course_offerings offering ON c.id = offering.course_id AND offering.deleted_at IS NULL
+        WHERE c.id = #{id} AND c.deleted_at IS NULL
+    </select>
+
+    <!-- Advanced Prerequisite Queries -->
+    <select id="getPrerequisiteChain" resultMap="courseWithDetailsResultMap">
+        WITH RECURSIVE prerequisite_chain AS (
+            -- Base case: direct prerequisites
+            SELECT c.*, 1 as level
+            FROM courses c
+            JOIN course_prerequisites cp ON c.id = cp.prerequisite_course_id
+            WHERE cp.course_id = #{courseId} AND cp.deleted_at IS NULL AND c.deleted_at IS NULL
+
+            UNION ALL
+
+            -- Recursive case: prerequisites of prerequisites
+            SELECT c.*, pc.level + 1
+            FROM courses c
+            JOIN course_prerequisites cp ON c.id = cp.prerequisite_course_id
+            JOIN prerequisite_chain pc ON cp.course_id = pc.id
+            WHERE cp.deleted_at IS NULL AND c.deleted_at IS NULL
+        )
+        SELECT * FROM prerequisite_chain
+        ORDER BY level DESC, course_code
+    </select>
+
+    <!-- Prerequisite Validation Query -->
+    <select id="validatePrerequisitesForStudent" resultType="java.util.Map">
+        SELECT
+            c.id as course_id,
+            c.course_code,
+            COUNT(cp.prerequisite_course_id) as total_prerequisites,
+            SUM(CASE WHEN e.id IS NOT NULL AND (e.grade IS NULL OR e.grade >= cp.minimum_grade) THEN 1 ELSE 0 END) as met_prerequisites,
+            SUM(CASE WHEN cp.is_mandatory = true AND (e.id IS NULL OR e.grade < cp.minimum_grade) THEN 1 ELSE 0 END) as unmet_mandatory
+        FROM courses c
+        LEFT JOIN course_prerequisites cp ON c.id = cp.course_id AND cp.deleted_at IS NULL
+        LEFT JOIN courses prereq ON cp.prerequisite_course_id = prereq.id AND prereq.deleted_at IS NULL
+        LEFT JOIN enrollments e ON prereq.id = (SELECT co.course_id FROM course_offerings co WHERE co.id = e.course_offering_id)
+                              AND e.student_id = #{studentId}
+                              AND e.status = 'COMPLETED'
+                              AND e.deleted_at IS NULL
+        WHERE c.id = #{courseId} AND c.deleted_at IS NULL
+        GROUP BY c.id, c.course_code
+    </select>
+
+    <!-- Course Search with Advanced Filtering -->
+    <select id="searchCoursesAdvanced" resultMap="courseWithDetailsResultMap">
+        SELECT DISTINCT
+            <include refid="courseWithDepartmentColumns"/>
+        FROM courses c
+        LEFT JOIN departments d ON c.department_id = d.id
+        LEFT JOIN course_prerequisites cp ON c.id = cp.course_id AND cp.deleted_at IS NULL
+        WHERE c.deleted_at IS NULL
+        <if test="criteria.searchText != null and criteria.searchText != ''">
+            AND (c.course_code LIKE CONCAT('%', #{criteria.searchText}, '%')
+                OR c.title LIKE CONCAT('%', #{criteria.searchText}, '%')
+                OR c.description LIKE CONCAT('%', #{criteria.searchText}, '%'))
+        </if>
+        <if test="criteria.departmentId != null">
+            AND c.department_id = #{criteria.departmentId}
+        </if>
+        <if test="criteria.level != null">
+            AND c.level = #{criteria.level}
+        </if>
+        <if test="criteria.minCredits != null">
+            AND c.credits >= #{criteria.minCredits}
+        </if>
+        <if test="criteria.maxCredits != null">
+            AND c.credits <= #{criteria.maxCredits}
+        </if>
+        <if test="criteria.requiresLab != null">
+            AND c.requires_lab = #{criteria.requiresLab}
+        </if>
+        <if test="criteria.isActive != null">
+            AND c.is_active = #{criteria.isActive}
+        </if>
+        <if test="criteria.hasNoPrerequisites != null and criteria.hasNoPrerequisites">
+            AND NOT EXISTS (SELECT 1 FROM course_prerequisites cp2 WHERE cp2.course_id = c.id AND cp2.deleted_at IS NULL)
+        </if>
+        <if test="criteria.maxCurrentEnrollment != null">
+            AND (SELECT COALESCE(AVG(co.current_enrollment), 0) FROM course_offerings co WHERE co.course_id = c.id AND co.deleted_at IS NULL) &lt;= #{criteria.maxCurrentEnrollment}
+        </if>
+        ORDER BY
+        <choose>
+            <when test="criteria.sortBy == 'code'">
+                c.course_code
+            </when>
+            <when test="criteria.sortBy == 'title'">
+                c.title
+            </when>
+            <when test="criteria.sortBy == 'credits'">
+                c.credits
+            </when>
+            <when test="criteria.sortBy == 'department'">
+                d.name, c.course_code
+            </when>
+            <otherwise>
+                c.course_code
+            </otherwise>
+        </choose>
+    </select>
+
+    <!-- Course Capacity and Enrollment Analysis -->
+    <select id="getCourseEnrollmentTrends" resultType="java.util.Map">
+        SELECT
+            c.id,
+            c.course_code,
+            c.title,
+            c.max_students,
+            COUNT(DISTINCT co.id) as offering_count,
+            COALESCE(AVG(co.current_enrollment), 0) as avg_enrollment,
+            COALESCE(MAX(co.current_enrollment), 0) as max_enrollment,
+            COALESCE(MIN(co.current_enrollment), 0) as min_enrollment,
+            COALESCE(SUM(CASE WHEN co.current_enrollment >= co.max_enrollment * 0.8 THEN 1 ELSE 0 END), 0) as high_enrollment_count,
+            COALESCE(SUM(CASE WHEN co.current_enrollment < co.max_enrollment * 0.5 THEN 1 ELSE 0 END), 0) as low_enrollment_count
+        FROM courses c
+        LEFT JOIN course_offerings co ON c.id = co.course_id AND co.deleted_at IS NULL
+        WHERE c.deleted_at IS NULL
+        GROUP BY c.id, c.course_code, c.title, c.max_students
+        HAVING COUNT(co.id) > 0
+        ORDER BY avg_enrollment DESC
+    </select>
+
+    <!-- Advanced Scheduling: Find Courses Available for Scheduling -->
+    <select id="findCoursesAvailableForScheduling" resultMap="courseWithDetailsResultMap">
+        SELECT DISTINCT
+            <include refid="courseWithDepartmentColumns"/>
+        FROM courses c
+        LEFT JOIN departments d ON c.department_id = d.id
+        WHERE c.deleted_at IS NULL
+        AND c.is_active = true
+        AND c.max_students >= #{minCapacity}
+        AND (
+            -- No mandatory prerequisites OR all prerequisites can be met
+            NOT EXISTS (
+                SELECT 1 FROM course_prerequisites cp
+                WHERE cp.course_id = c.id
+                AND cp.is_mandatory = true
+                AND cp.deleted_at IS NULL
+            )
+            OR EXISTS (
+                -- At least some students have met prerequisites
+                SELECT 1 FROM students s
+                WHERE s.department_id = c.department_id
+                AND s.status = 'ACTIVE'
+                AND s.deleted_at IS NULL
+                AND NOT EXISTS (
+                    SELECT 1 FROM course_prerequisites cp2
+                    JOIN courses prereq ON cp2.prerequisite_course_id = prereq.id
+                    LEFT JOIN enrollments e ON prereq.id = (
+                        SELECT co2.course_id FROM course_offerings co2 WHERE co2.id = e.course_offering_id
+                    )
+                    WHERE cp2.course_id = c.id
+                    AND cp2.is_mandatory = true
+                    AND cp2.deleted_at IS NULL
+                    AND prereq.deleted_at IS NULL
+                    AND (e.id IS NULL OR e.grade < cp2.minimum_grade OR e.status != 'COMPLETED')
+                    AND e.student_id = s.id
+                )
+                LIMIT 1
+            )
+        )
+        <if test="requiresLab != null">
+            AND c.requires_lab = #{requiresLab}
+        </if>
+        ORDER BY c.course_code
+    </select>
+
+    <!-- Course Recommendation Engine -->
+    <select id="getCourseRecommendations" resultType="java.util.Map">
+        WITH student_completed_courses AS (
+            SELECT DISTINCT c.id
+            FROM courses c
+            JOIN course_offerings co ON c.id = co.course_id
+            JOIN enrollments e ON co.id = e.course_offering_id
+            WHERE e.student_id = #{studentId}
+            AND e.status = 'COMPLETED'
+            AND e.deleted_at IS NULL AND co.deleted_at IS NULL AND c.deleted_at IS NULL
+        ),
+        eligible_courses AS (
+            SELECT c.*,
+                   (
+                       SELECT COUNT(*)
+                       FROM course_prerequisites cp
+                       WHERE cp.course_id = c.id
+                       AND cp.is_mandatory = true
+                       AND cp.deleted_at IS NULL
+                       AND cp.prerequisite_course_id NOT IN (SELECT id FROM student_completed_courses)
+                   ) as unmet_prerequisites_count
+            FROM courses c
+            WHERE c.deleted_at IS NULL
+            AND c.is_active = true
+            AND c.id NOT IN (SELECT id FROM student_completed_courses)
+        )
+        SELECT
+            c.id,
+            c.course_code,
+            c.title,
+            c.level,
+            c.credits,
+            ec.unmet_prerequisites_count,
+            CASE
+                WHEN ec.unmet_prerequisites_count = 0 THEN 'ELIGIBLE'
+                WHEN ec.unmet_prerequisites_count = 1 THEN 'NEEDS_1_PREREQ'
+                WHEN ec.unmet_prerequisites_count = 2 THEN 'NEEDS_2_PREREQS'
+                ELSE 'NEEDS_MANY_PREREQS'
+            END as eligibility_status,
+            CASE
+                WHEN c.level = 'UNDERGRADUATE' THEN 1
+                WHEN c.level = 'GRADUATE' THEN 2
+                ELSE 3
+            END as level_priority
+        FROM eligible_courses ec
+        JOIN courses c ON ec.id = c.id
+        WHERE ec.unmet_prerequisites_count <= #{maxUnmetPrerequisites}
+        ORDER BY
+            ec.unmet_prerequisites_count ASC,
+            level_priority ASC,
+            c.course_code
+    </select>
+
+    <!-- Batch Operations with Validation -->
+    <insert id="batchInsertPrerequisites" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO course_prerequisites
+        (course_id, prerequisite_course_id, is_mandatory, minimum_grade, created_at)
+        VALUES
+        <foreach collection="prerequisites" item="prereq" separator=",">
+            (#{prereq.courseId}, #{prereq.prerequisiteCourseId}, #{prereq.isMandatory},
+             #{prereq.minimumGrade}, #{prereq.createdAt})
+        </foreach>
+    </insert>
+
+    <!-- Course Statistics Dashboard Query -->
+    <select id="getCourseDashboardStatistics" resultType="java.util.Map">
+        SELECT
+            'TOTAL_COURSES' as metric,
+            COUNT(*) as value
+        FROM courses
+        WHERE deleted_at IS NULL
+
+        UNION ALL
+
+        SELECT
+            'ACTIVE_COURSES' as metric,
+            COUNT(*) as value
+        FROM courses
+        WHERE deleted_at IS NULL AND is_active = true
+
+        UNION ALL
+
+        SELECT
+            'LAB_COURSES' as metric,
+            COUNT(*) as value
+        FROM courses
+        WHERE deleted_at IS NULL AND requires_lab = true
+
+        UNION ALL
+
+        SELECT
+            'AVG_CREDITS' as metric,
+            AVG(credits) as value
+        FROM courses
+        WHERE deleted_at IS NULL
+
+        UNION ALL
+
+        SELECT
+            'COURSES_WITH_PREREQS' as metric,
+            COUNT(DISTINCT course_id) as value
+        FROM course_prerequisites
+        WHERE deleted_at IS NULL
+
+        UNION ALL
+
+        SELECT
+            'TOTAL_OFFERINGS' as metric,
+            COUNT(*) as value
+        FROM course_offerings
+        WHERE deleted_at IS NULL
+    </select>
+
+</mapper>

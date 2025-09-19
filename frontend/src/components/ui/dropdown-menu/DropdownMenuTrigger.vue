@@ -1,0 +1,1 @@
+<template>\n  <component\n    :is=\"as\"\n    v-bind=\"$attrs\"\n    @click=\"$parent.toggle\"\n  >\n    <slot />\n  </component>\n</template>\n\n<script setup lang=\"ts\">\nimport { computed } from 'vue'\n\ninterface Props {\n  as?: string | object\n}\n\nconst props = withDefaults(defineProps<Props>(), {\n  as: 'button'\n})\n</script>

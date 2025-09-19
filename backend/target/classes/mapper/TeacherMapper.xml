@@ -1,0 +1,360 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+    "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.school.scheduling.mapper.TeacherMapper">
+
+    <!-- Result Maps -->
+    <resultMap id="teacherWithDetailsResultMap" type="com.school.scheduling.domain.Teacher">
+        <id property="id" column="id"/>
+        <result property="userId" column="user_id"/>
+        <result property="employeeId" column="employee_id"/>
+        <result property="departmentId" column="department_id"/>
+        <result property="title" column="title"/>
+        <result property="maxWeeklyHours" column="max_weekly_hours"/>
+        <result property="maxCoursesPerSemester" column="max_courses_per_semester"/>
+        <result property="officeLocation" column="office_location"/>
+        <result property="phone" column="phone"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+        <result property="deletedAt" column="deleted_at"/>
+
+        <!-- Associations -->
+        <association property="user" javaType="com.school.scheduling.domain.User">
+            <id property="id" column="user_id"/>
+            <result property="username" column="username"/>
+            <result property="email" column="email"/>
+            <result property="firstName" column="first_name"/>
+            <result property="lastName" column="last_name"/>
+            <result property="isActive" column="is_active"/>
+        </association>
+
+        <association property="department" javaType="com.school.scheduling.domain.Department">
+            <id property="id" column="department_id"/>
+            <result property="name" column="department_name"/>
+            <result property="code" column="department_code"/>
+        </association>
+
+        <!-- Collections -->
+        <collection property="specializations" ofType="com.school.scheduling.domain.TeacherSpecialization">
+            <id property="id" column="spec_id"/>
+            <result property="teacherId" column="teacher_id"/>
+            <result property="subjectCode" column="subject_code"/>
+            <result property="proficiencyLevel" column="proficiency_level"/>
+            <result property="yearsExperience" column="years_experience"/>
+            <result property="createdAt" column="spec_created_at"/>
+            <result property="updatedAt" column="spec_updated_at"/>
+        </collection>
+    </resultMap>
+
+    <!-- Base Columns -->
+    <sql id="teacherColumns">
+        t.id, t.user_id, t.employee_id, t.department_id, t.title, t.max_weekly_hours,
+        t.max_courses_per_semester, t.office_location, t.phone, t.created_at, t.updated_at, t.deleted_at
+    </sql>
+
+    <sql id="teacherWithUserColumns">
+        t.id, t.user_id, t.employee_id, t.department_id, t.title, t.max_weekly_hours,
+        t.max_courses_per_semester, t.office_location, t.phone, t.created_at, t.updated_at, t.deleted_at,
+        u.username, u.email, u.first_name, u.last_name, u.is_active
+    </sql>
+
+    <sql id="teacherWithDetailsColumns">
+        t.id, t.user_id, t.employee_id, t.department_id, t.title, t.max_weekly_hours,
+        t.max_courses_per_semester, t.office_location, t.phone, t.created_at, t.updated_at, t.deleted_at,
+        u.username, u.email, u.first_name, u.last_name, u.is_active,
+        d.name as department_name, d.code as department_code
+    </sql>
+
+    <!-- Basic CRUD Operations -->
+    <select id="findById" resultMap="teacherWithDetailsResultMap">
+        SELECT
+            <include refid="teacherWithDetailsColumns"/>,
+            spec.id as spec_id, spec.subject_code, spec.proficiency_level,
+            spec.years_experience, spec.created_at as spec_created_at,
+            spec.updated_at as spec_updated_at
+        FROM teachers t
+        LEFT JOIN users u ON t.user_id = u.id
+        LEFT JOIN departments d ON t.department_id = d.id
+        LEFT JOIN teacher_specializations spec ON t.id = spec.teacher_id AND spec.deleted_at IS NULL
+        WHERE t.id = #{id} AND t.deleted_at IS NULL
+    </select>
+
+    <select id="findAllWithDetails" resultMap="teacherWithDetailsResultMap">
+        SELECT
+            <include refid="teacherWithDetailsColumns"/>,
+            spec.id as spec_id, spec.subject_code, spec.proficiency_level,
+            spec.years_experience, spec.created_at as spec_created_at,
+            spec.updated_at as spec_updated_at
+        FROM teachers t
+        LEFT JOIN users u ON t.user_id = u.id
+        LEFT JOIN departments d ON t.department_id = d.id
+        LEFT JOIN teacher_specializations spec ON t.id = spec.teacher_id AND spec.deleted_at IS NULL
+        WHERE t.deleted_at IS NULL
+        ORDER BY t.created_at DESC
+    </select>
+
+    <!-- Complex Scheduling Queries -->
+    <select id="findAvailableForTimeSlot" resultMap="teacherWithDetailsResultMap">
+        SELECT DISTINCT
+            <include refid="teacherWithDetailsColumns"/>
+        FROM teachers t
+        LEFT JOIN users u ON t.user_id = u.id
+        LEFT JOIN departments d ON t.department_id = d.id
+        WHERE t.deleted_at IS NULL
+        AND u.is_active = true
+        AND t.id NOT IN (
+            SELECT co.teacher_id
+            FROM schedules s
+            JOIN course_offerings co ON s.course_offering_id = co.id
+            WHERE s.time_slot_id = #{timeSlotId}
+            AND s.schedule_date = #{date}
+            AND s.deleted_at IS NULL
+        )
+        <if test="departmentId != null">
+            AND t.department_id = #{departmentId}
+        </if>
+        <if test="subjectCode != null">
+            AND EXISTS (
+                SELECT 1 FROM teacher_specializations ts
+                WHERE ts.teacher_id = t.id
+                AND ts.subject_code = #{subjectCode}
+                AND ts.deleted_at IS NULL
+            )
+        </if>
+        ORDER BY t.created_at DESC
+    </select>
+
+    <select id="findTeachersWithScheduleConflicts" resultMap="teacherWithDetailsResultMap">
+        SELECT
+            <include refid="teacherWithDetailsColumns"/>
+        FROM teachers t
+        LEFT JOIN users u ON t.user_id = u.id
+        LEFT JOIN departments d ON t.department_id = d.id
+        JOIN schedules s1 ON EXISTS (
+            SELECT 1 FROM course_offerings co1
+            WHERE co1.id = s1.course_offering_id AND co1.teacher_id = t.id
+        )
+        JOIN schedules s2 ON EXISTS (
+            SELECT 1 FROM course_offerings co2
+            WHERE co2.id = s2.course_offering_id AND co2.teacher_id = t.id
+        )
+        WHERE t.deleted_at IS NULL
+        AND s1.deleted_at IS NULL
+        AND s2.deleted_at IS NULL
+        AND s1.id != s2.id
+        AND s1.schedule_date = s2.schedule_date
+        AND s1.time_slot_id = s2.time_slot_id
+        AND s1.schedule_date BETWEEN #{startDate} AND #{endDate}
+        GROUP BY t.id
+        ORDER BY t.created_at DESC
+    </select>
+
+    <select id="findTeachersByWorkload" resultMap="teacherWithDetailsResultMap">
+        SELECT
+            <include refid="teacherWithDetailsColumns"/>,
+            COUNT(DISTINCT s.id) as scheduled_count,
+            COALESCE(SUM(c.contact_hours_per_week), 0) as total_hours
+        FROM teachers t
+        LEFT JOIN users u ON t.user_id = u.id
+        LEFT JOIN departments d ON t.department_id = d.id
+        LEFT JOIN course_offerings co ON t.id = co.teacher_id AND co.deleted_at IS NULL
+        LEFT JOIN schedules s ON co.id = s.course_offering_id AND s.deleted_at IS NULL
+        LEFT JOIN courses c ON co.course_id = c.id
+        WHERE t.deleted_at IS NULL
+        AND s.schedule_date BETWEEN #{startDate} AND #{endDate}
+        GROUP BY t.id
+        <if test="maxHours != null">
+            HAVING COALESCE(SUM(c.contact_hours_per_week), 0) &lt;= #{maxHours}
+        </if>
+        <if test="maxCourses != null">
+            AND COUNT(DISTINCT s.id) &lt;= #{maxCourses}
+        </if>
+        ORDER BY total_hours ASC
+    </select>
+
+    <!-- Advanced Search with Dynamic SQL -->
+    <select id="searchTeachersAdvanced" resultMap="teacherWithDetailsResultMap">
+        SELECT DISTINCT
+            <include refid="teacherWithDetailsColumns"/>
+        FROM teachers t
+        LEFT JOIN users u ON t.user_id = u.id
+        LEFT JOIN departments d ON t.department_id = d.id
+        LEFT JOIN teacher_specializations ts ON t.id = ts.teacher_id AND ts.deleted_at IS NULL
+        WHERE t.deleted_at IS NULL
+        <if test="criteria.name != null and criteria.name != ''">
+            AND (u.first_name LIKE CONCAT('%', #{criteria.name}, '%')
+                OR u.last_name LIKE CONCAT('%', #{criteria.name}, '%')
+                OR CONCAT(u.first_name, ' ', u.last_name) LIKE CONCAT('%', #{criteria.name}, '%'))
+        </if>
+        <if test="criteria.employeeId != null and criteria.employeeId != ''">
+            AND t.employee_id LIKE CONCAT('%', #{criteria.employeeId}, '%')
+        </if>
+        <if test="criteria.departmentId != null">
+            AND t.department_id = #{criteria.departmentId}
+        </if>
+        <if test="criteria.title != null">
+            AND t.title = #{criteria.title}
+        </if>
+        <if test="criteria.subjectCodes != null and !criteria.subjectCodes.isEmpty()">
+            AND ts.subject_code IN
+            <foreach collection="criteria.subjectCodes" item="subject" open="(" separator="," close=")">
+                #{subject}
+            </foreach>
+        </if>
+        <if test="criteria.minProficiency != null">
+            AND ts.proficiency_level &gt;= #{criteria.minProficiency}
+        </if>
+        <if test="criteria.minExperience != null">
+            AND ts.years_experience &gt;= #{criteria.minExperience}
+        </if>
+        <if test="criteria.maxWeeklyHours != null">
+            AND t.max_weekly_hours &gt;= #{criteria.maxWeeklyHours}
+        </if>
+        <if test="criteria.isActive != null">
+            AND u.is_active = #{criteria.isActive}
+        </if>
+        ORDER BY
+        <choose>
+            <when test="criteria.sortBy == 'name'">
+                u.last_name, u.first_name
+            </when>
+            <when test="criteria.sortBy == 'department'">
+                d.name, u.last_name
+            </when>
+            <when test="criteria.sortBy == 'experience'">
+                ts.years_experience DESC
+            </when>
+            <otherwise>
+                t.created_at DESC
+            </otherwise>
+        </choose>
+    </select>
+
+    <!-- Teacher Workload Analysis -->
+    <select id="getTeacherWorkloadAnalysis" resultType="com.school.scheduling.mapper.TeacherMapper$TeacherWorkloadAnalysis">
+        SELECT
+            t.id as teacher_id,
+            CONCAT(u.first_name, ' ', u.last_name) as teacher_name,
+            d.name as department_name,
+            t.title,
+            t.max_weekly_hours as max_hours,
+            COALESCE(SUM(c.contact_hours_per_week), 0) as scheduled_hours,
+            COUNT(DISTINCT co.id) as course_count,
+            COUNT(DISTINCT s.id) as schedule_count
+        FROM teachers t
+        LEFT JOIN users u ON t.user_id = u.id
+        LEFT JOIN departments d ON t.department_id = d.id
+        LEFT JOIN course_offerings co ON t.id = co.teacher_id AND co.deleted_at IS NULL
+        LEFT JOIN schedules s ON co.id = s.course_offering_id AND s.deleted_at IS NULL
+        LEFT JOIN courses c ON co.course_id = c.id
+        LEFT JOIN semesters sem ON co.semester_id = sem.id
+        WHERE t.deleted_at IS NULL
+        AND sem.is_current = true
+        GROUP BY t.id, u.first_name, u.last_name, d.name, t.title, t.max_weekly_hours
+        ORDER BY scheduled_hours DESC
+    </select>
+
+    <!-- Performance Optimized Queries -->
+    <select id="findTeachersForDepartmentReport" resultType="com.school.scheduling.mapper.TeacherMapper$DepartmentTeacherReport">
+        SELECT
+            d.id as department_id,
+            d.name as department_name,
+            COUNT(t.id) as total_teachers,
+            COUNT(CASE WHEN t.title = 'PROFESSOR' THEN 1 END) as professor_count,
+            COUNT(CASE WHEN t.title = 'ASSOCIATE_PROFESSOR' THEN 1 END) as associate_professor_count,
+            COUNT(CASE WHEN t.title = 'ASSISTANT_PROFESSOR' THEN 1 END) as assistant_professor_count,
+            COUNT(CASE WHEN t.title = 'INSTRUCTOR' THEN 1 END) as instructor_count,
+            COUNT(CASE WHEN t.title = 'ADJUNCT' THEN 1 END) as adjunct_count,
+            AVG(t.max_weekly_hours) as avg_max_hours,
+            AVG(t.max_courses_per_semester) as avg_max_courses
+        FROM departments d
+        LEFT JOIN teachers t ON d.id = t.department_id AND t.deleted_at IS NULL
+        WHERE d.deleted_at IS NULL
+        GROUP BY d.id, d.name
+        ORDER BY d.name
+    </select>
+
+    <!-- Teacher Availability Calendar Query -->
+    <select id="getTeacherAvailabilityCalendar" resultMap="teacherWithDetailsResultMap">
+        SELECT
+            <include refid="teacherWithDetailsColumns"/>
+        FROM teachers t
+        LEFT JOIN users u ON t.user_id = u.id
+        LEFT JOIN departments d ON t.department_id = d.id
+        WHERE t.deleted_at IS NULL
+        AND u.is_active = true
+        AND t.id NOT IN (
+            SELECT DISTINCT co.teacher_id
+            FROM schedules s
+            JOIN course_offerings co ON s.course_offering_id = co.id
+            WHERE s.schedule_date BETWEEN #{startDate} AND #{endDate}
+            AND s.deleted_at IS NULL
+            <if test="timeSlotIds != null and !timeSlotIds.isEmpty()">
+                AND s.time_slot_id IN
+                <foreach collection="timeSlotIds" item="slotId" open="(" separator="," close=")">
+                    #{slotId}
+                </foreach>
+            </if>
+        )
+        <if test="departmentId != null">
+            AND t.department_id = #{departmentId}
+        </if>
+        ORDER BY d.name, u.last_name, u.first_name
+    </select>
+
+    <!-- Complex Query: Teacher Specialization Coverage -->
+    <select id="getSpecializationCoverageReport" resultType="com.school.scheduling.mapper.TeacherMapper$SpecializationCoverage">
+        SELECT
+            ts.subject_code,
+            ts.proficiency_level,
+            COUNT(DISTINCT ts.teacher_id) as teacher_count,
+            COUNT(DISTINCT t.department_id) as department_coverage,
+            AVG(ts.years_experience) as avg_experience,
+            MIN(ts.years_experience) as min_experience,
+            MAX(ts.years_experience) as max_experience
+        FROM teacher_specializations ts
+        JOIN teachers t ON ts.teacher_id = t.id
+        WHERE ts.deleted_at IS NULL
+        AND t.deleted_at IS NULL
+        GROUP BY ts.subject_code, ts.proficiency_level
+        ORDER BY ts.subject_code, ts.proficiency_level
+    </select>
+
+    <!-- Batch Operations with Performance Optimization -->
+    <insert id="batchInsertSpecializations" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO teacher_specializations
+        (teacher_id, subject_code, proficiency_level, years_experience, created_at, updated_at)
+        VALUES
+        <foreach collection="specializations" item="spec" separator=",">
+            (#{spec.teacherId}, #{spec.subjectCode}, #{spec.proficiencyLevel},
+             #{spec.yearsExperience}, #{spec.createdAt}, #{spec.updatedAt})
+        </foreach>
+    </insert>
+
+    <!-- Result Classes for Complex Queries -->
+    <resultMap id="teacherWorkloadAnalysisResult" type="com.school.scheduling.mapper.TeacherMapper$TeacherWorkloadAnalysis">
+        <result property="teacherId" column="teacher_id"/>
+        <result property="teacherName" column="teacher_name"/>
+        <result property="departmentName" column="department_name"/>
+        <result property="title" column="title"/>
+        <result property="maxHours" column="max_hours"/>
+        <result property="scheduledHours" column="scheduled_hours"/>
+        <result property="courseCount" column="course_count"/>
+        <result property="scheduleCount" column="schedule_count"/>
+    </resultMap>
+
+    <resultMap id="departmentTeacherReportResult" type="com.school.scheduling.mapper.TeacherMapper$DepartmentTeacherReport">
+        <result property="departmentId" column="department_id"/>
+        <result property="departmentName" column="department_name"/>
+        <result property="totalTeachers" column="total_teachers"/>
+        <result property="professorCount" column="professor_count"/>
+        <result property="associateProfessorCount" column="associate_professor_count"/>
+        <result property="assistantProfessorCount" column="assistant_professor_count"/>
+        <result property="instructorCount" column="instructor_count"/>
+        <result property="adjunctCount" column="adjunct_count"/>
+        <result property="avgMaxHours" column="avg_max_hours"/>
+        <result property="avgMaxCourses" column="avg_max_courses"/>
+    </resultMap>
+
+</mapper>

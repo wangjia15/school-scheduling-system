@@ -1,0 +1,277 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+    "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.school.scheduling.mapper.EnrollmentMapper">
+
+    <resultMap id="enrollmentWithDetailsResultMap" type="com.school.scheduling.domain.Enrollment" extends="enrollmentResultMap">
+        <association property="student" javaType="com.school.scheduling.domain.Student">
+            <id property="id" column="student_id"/>
+            <result property="studentId" column="student_student_id"/>
+            <result property="firstName" column="student_first_name"/>
+            <result property="lastName" column="student_last_name"/>
+            <result property="email" column="student_email"/>
+            <result property="departmentId" column="student_department_id"/>
+            <result property="gpa" column="student_gpa"/>
+        </association>
+        <association property="courseOffering" javaType="com.school.scheduling.domain.CourseOffering">
+            <id property="id" column="course_offering_id"/>
+            <result property="courseId" column="offering_course_id"/>
+            <result property="sectionNumber" column="offering_section_number"/>
+            <result property="teacherId" column="offering_teacher_id"/>
+            <result property="maxEnrollment" column="offering_max_enrollment"/>
+            <result property="currentEnrollment" column="offering_current_enrollment"/>
+            <result property="scheduleType" column="offering_schedule_type"/>
+            <result property="isOpen" column="offering_is_open"/>
+        </association>
+    </resultMap>
+
+    <!-- Complex query for enrollment analytics -->
+    <select id="getEnrollmentAnalytics" resultType="com.school.scheduling.mapper.EnrollmentMapper$EnrollmentAnalytics">
+        SELECT
+            s.id as semester_id,
+            s.name as semester_name,
+            s.academic_year,
+            COUNT(DISTINCT e.id) as total_enrollments,
+            COUNT(DISTINCT e.student_id) as unique_students,
+            COUNT(DISTINCT e.course_offering_id) as unique_courses,
+            COUNT(DISTINCT CASE WHEN e.status = 'ENROLLED' THEN e.id END) as active_enrollments,
+            COUNT(DISTINCT CASE WHEN e.status = 'COMPLETED' THEN e.id END) as completed_enrollments,
+            COUNT(DISTINCT CASE WHEN e.status = 'DROPPED' THEN e.id END) as dropped_enrollments,
+            COUNT(DISTINCT CASE WHEN e.status = 'WITHDRAWN' THEN e.id END) as withdrawn_enrollments,
+            AVG(CASE WHEN e.grade IS NOT NULL THEN e.grade END) as average_grade,
+            MAX(CASE WHEN e.grade IS NOT NULL THEN e.grade END) as highest_grade,
+            MIN(CASE WHEN e.grade IS NOT NULL THEN e.grade END) as lowest_grade,
+            COUNT(DISTINCT CASE WHEN e.grade >= 90 THEN e.id END) as a_grades,
+            COUNT(DISTINCT CASE WHEN e.grade >= 80 AND e.grade < 90 THEN e.id END) as b_grades,
+            COUNT(DISTINCT CASE WHEN e.grade >= 70 AND e.grade < 80 THEN e.id END) as c_grades,
+            COUNT(DISTINCT CASE WHEN e.grade >= 60 AND e.grade < 70 THEN e.id END) as d_grades,
+            COUNT(DISTINCT CASE WHEN e.grade < 60 THEN e.id END) as f_grades,
+            -- Retention metrics
+            CASE
+                WHEN COUNT(DISTINCT e.id) = 0 THEN 0
+                ELSE (COUNT(DISTINCT CASE WHEN e.status = 'COMPLETED' THEN e.id END) * 100.0 /
+                     COUNT(DISTINCT e.id))
+            END as completion_rate_percentage,
+            -- Department distribution
+            COUNT(DISTINCT CASE WHEN d.name = 'Computer Science' THEN e.student_id END) as cs_students,
+            COUNT(DISTINCT CASE WHEN d.name = 'Mathematics' THEN e.student_id END) as math_students,
+            COUNT(DISTINCT CASE WHEN d.name = 'Physics' THEN e.student_id END) as physics_students,
+            COUNT(DISTINCT CASE WHEN d.name = 'Chemistry' THEN e.student_id END) as chemistry_students
+        FROM semesters s
+        LEFT JOIN course_offerings co ON s.id = co.semester_id AND co.deleted_at IS NULL
+        LEFT JOIN enrollments e ON co.id = e.course_offering_id AND e.deleted_at IS NULL
+        LEFT JOIN students st ON e.student_id = st.id AND st.deleted_at IS NULL
+        LEFT JOIN departments d ON st.department_id = d.id AND d.deleted_at IS NULL
+        WHERE s.deleted_at IS NULL
+        <if test="academicYear != null">
+            AND s.academic_year = #{academicYear}
+        </if>
+        <if test="semesterId != null">
+            AND s.id = #{semesterId}
+        </if>
+        GROUP BY s.id, s.name, s.academic_year
+        ORDER BY s.start_date DESC
+    </select>
+
+    <!-- Query for student enrollment history -->
+    <select id="getStudentEnrollmentHistory" resultType="com.school.scheduling.mapper.EnrollmentMapper$StudentEnrollmentHistory">
+        SELECT
+            st.id as student_id,
+            st.student_id as student_identifier,
+            st.first_name,
+            st.last_name,
+            st.email,
+            d.name as department_name,
+            COUNT(DISTINCT e.id) as total_enrollments,
+            COUNT(DISTINCT e.course_offering_id) as unique_courses_taken,
+            COUNT(DISTINCT CASE WHEN e.status = 'COMPLETED' THEN e.id END) as completed_courses,
+            COUNT(DISTINCT CASE WHEN e.status = 'ENROLLED' THEN e.id END) as current_enrollments,
+            COUNT(DISTINCT CASE WHEN e.status = 'DROPPED' THEN e.id END) as dropped_courses,
+            AVG(CASE WHEN e.grade IS NOT NULL THEN e.grade END) as average_grade,
+            SUM(CASE WHEN e.grade IS NOT NULL THEN c.credits ELSE 0 END) as total_credits_earned,
+            -- Academic standing
+            COUNT(DISTINCT CASE WHEN e.grade >= 90 THEN e.id END) as a_count,
+            COUNT(DISTINCT CASE WHEN e.grade >= 80 AND e.grade < 90 THEN e.id END) as b_count,
+            COUNT(DISTINCT CASE WHEN e.grade >= 70 AND e.grade < 80 THEN e.id END) as c_count,
+            COUNT(DISTINCT CASE WHEN e.grade >= 60 AND e.grade < 70 THEN e.id END) as d_count,
+            COUNT(DISTINCT CASE WHEN e.grade < 60 THEN e.id END) as f_count,
+            -- Performance trends
+            MAX(e.enrollment_date) as last_enrollment_date,
+            MIN(e.enrollment_date) as first_enrollment_date,
+            CASE
+                WHEN COUNT(DISTINCT CASE WHEN e.status = 'COMPLETED' THEN e.id END) = 0 THEN 0
+                ELSE (COUNT(DISTINCT CASE WHEN e.status = 'COMPLETED' AND e.grade >= 60 THEN e.id END) * 100.0 /
+                     COUNT(DISTINCT CASE WHEN e.status = 'COMPLETED' THEN e.id END))
+            END as success_rate_percentage
+        FROM students st
+        LEFT JOIN enrollments e ON st.id = e.student_id AND e.deleted_at IS NULL
+        LEFT JOIN course_offerings co ON e.course_offering_id = co.id AND co.deleted_at IS NULL
+        LEFT JOIN courses c ON co.course_id = c.id AND c.deleted_at IS NULL
+        LEFT JOIN departments d ON st.department_id = d.id AND d.deleted_at IS NULL
+        WHERE st.deleted_at IS NULL
+        <if test="studentId != null">
+            AND st.id = #{studentId}
+        </if>
+        <if test="departmentId != null">
+            AND st.department_id = #{departmentId}
+        </if>
+        GROUP BY st.id, st.student_id, st.first_name, st.last_name, st.email, d.name
+        HAVING total_enrollments > 0
+        ORDER BY total_credits_earned DESC, average_grade DESC
+    </select>
+
+    <!-- Query for course enrollment trends -->
+    <select id="getCourseEnrollmentTrends" resultType="com.school.scheduling.mapper.EnrollmentMapper$CourseEnrollmentTrend">
+        SELECT
+            c.id as course_id,
+            c.course_identifier,
+            c.title,
+            c.level,
+            c.credits,
+            d.name as department_name,
+            COUNT(DISTINCT e.id) as total_enrollments,
+            COUNT(DISTINCT e.student_id) as unique_students,
+            COUNT(DISTINCT co.id) as total_offerings,
+            AVG(co.current_enrollment) as average_enrollment_per_offering,
+            AVG(co.max_enrollment) as average_capacity_per_offering,
+            CASE
+                WHEN AVG(co.max_enrollment) = 0 THEN 0
+                ELSE (AVG(co.current_enrollment) * 100.0 / AVG(co.max_enrollment))
+            END as average_fill_rate_percentage,
+            -- Grade distribution
+            AVG(CASE WHEN e.grade IS NOT NULL THEN e.grade END) as average_grade,
+            COUNT(DISTINCT CASE WHEN e.grade >= 90 THEN e.id END) as a_grades,
+            COUNT(DISTINCT CASE WHEN e.grade >= 80 AND e.grade < 90 THEN e.id END) as b_grades,
+            COUNT(DISTINCT CASE WHEN e.grade >= 70 AND e.grade < 80 THEN e.id END) as c_grades,
+            COUNT(DISTINCT CASE WHEN e.grade >= 60 AND e.grade < 70 THEN e.id END) as d_grades,
+            COUNT(DISTINCT CASE WHEN e.grade < 60 THEN e.id END) as f_grades,
+            -- Success metrics
+            COUNT(DISTINCT CASE WHEN e.status = 'COMPLETED' AND e.grade >= 60 THEN e.id END) as successful_completions,
+            COUNT(DISTINCT CASE WHEN e.status = 'COMPLETED' AND e.grade < 60 THEN e.id END) as failed_completions,
+            CASE
+                WHEN COUNT(DISTINCT CASE WHEN e.status = 'COMPLETED' THEN e.id END) = 0 THEN 0
+                ELSE (COUNT(DISTINCT CASE WHEN e.status = 'COMPLETED' AND e.grade >= 60 THEN e.id END) * 100.0 /
+                     COUNT(DISTINCT CASE WHEN e.status = 'COMPLETED' THEN e.id END))
+            END as success_rate_percentage,
+            -- Popularity ranking
+            RANK() OVER (ORDER BY COUNT(DISTINCT e.student_id) DESC) as popularity_rank,
+            -- Revenue estimation
+            SUM(c.credits * COUNT(DISTINCT e.student_id) * 500) as estimated_revenue
+        FROM courses c
+        LEFT JOIN course_offerings co ON c.id = co.course_id AND co.deleted_at IS NULL
+        LEFT JOIN enrollments e ON co.id = e.course_offering_id AND e.deleted_at IS NULL
+        LEFT JOIN departments d ON c.department_id = d.id AND d.deleted_at IS NULL
+        WHERE c.deleted_at IS NULL
+        <if test="departmentId != null">
+            AND c.department_id = #{departmentId}
+        </if>
+        <if test="level != null">
+            AND c.level = #{level}
+        </if>
+        GROUP BY c.id, c.course_identifier, c.title, c.level, c.credits, d.name
+        HAVING total_enrollments > 0
+        ORDER BY popularity_rank, average_grade DESC
+    </select>
+
+    <!-- Batch operations -->
+    <insert id="batchInsert" parameterType="java.util.List">
+        INSERT INTO enrollments
+        (student_id, course_offering_id, enrollment_date, status, grade, grade_letter, is_attending, created_at, updated_at)
+        VALUES
+        <foreach collection="list" item="enrollment" separator=",">
+            (#{enrollment.studentId}, #{enrollment.courseOfferingId}, #{enrollment.enrollmentDate},
+             #{enrollment.status}, #{enrollment.grade}, #{enrollment.gradeLetter},
+             #{enrollment.isAttending}, #{enrollment.createdAt}, #{enrollment.updatedAt})
+        </foreach>
+    </insert>
+
+    <update id="batchUpdateGrades" parameterType="java.util.List">
+        <foreach collection="list" item="update" separator=";">
+            UPDATE enrollments
+            SET grade = #{update.grade},
+                grade_letter = #{update.gradeLetter},
+                status = 'COMPLETED',
+                updated_at = #{update.updatedAt}
+            WHERE id = #{update.id}
+        </foreach>
+    </update>
+
+    <!-- Utility result classes -->
+    <resultMap id="enrollmentAnalyticsResultMap" type="com.school.scheduling.mapper.EnrollmentMapper$EnrollmentAnalytics">
+        <result property="semesterId" column="semester_id"/>
+        <result property="semesterName" column="semester_name"/>
+        <result property="academicYear" column="academic_year"/>
+        <result property="totalEnrollments" column="total_enrollments"/>
+        <result property="uniqueStudents" column="unique_students"/>
+        <result property="uniqueCourses" column="unique_courses"/>
+        <result property="activeEnrollments" column="active_enrollments"/>
+        <result property="completedEnrollments" column="completed_enrollments"/>
+        <result property="droppedEnrollments" column="dropped_enrollments"/>
+        <result property="withdrawnEnrollments" column="withdrawn_enrollments"/>
+        <result property="averageGrade" column="average_grade"/>
+        <result property="highestGrade" column="highest_grade"/>
+        <result property="lowestGrade" column="lowest_grade"/>
+        <result property="aGrades" column="a_grades"/>
+        <result property="bGrades" column="b_grades"/>
+        <result property="cGrades" column="c_grades"/>
+        <result property="dGrades" column="d_grades"/>
+        <result property="fGrades" column="f_grades"/>
+        <result property="completionRatePercentage" column="completion_rate_percentage"/>
+        <result property="csStudents" column="cs_students"/>
+        <result property="mathStudents" column="math_students"/>
+        <result property="physicsStudents" column="physics_students"/>
+        <result property="chemistryStudents" column="chemistry_students"/>
+    </resultMap>
+
+    <resultMap id="studentEnrollmentHistoryResultMap" type="com.school.scheduling.mapper.EnrollmentMapper$StudentEnrollmentHistory">
+        <result property="studentId" column="student_id"/>
+        <result property="studentIdentifier" column="student_identifier"/>
+        <result property="firstName" column="first_name"/>
+        <result property="lastName" column="last_name"/>
+        <result property="email" column="email"/>
+        <result property="departmentName" column="department_name"/>
+        <result property="totalEnrollments" column="total_enrollments"/>
+        <result property="uniqueCoursesTaken" column="unique_courses_taken"/>
+        <result property="completedCourses" column="completed_courses"/>
+        <result property="currentEnrollments" column="current_enrollments"/>
+        <result property="droppedCourses" column="dropped_courses"/>
+        <result property="averageGrade" column="average_grade"/>
+        <result property="totalCreditsEarned" column="total_credits_earned"/>
+        <result property="aCount" column="a_count"/>
+        <result property="bCount" column="b_count"/>
+        <result property="cCount" column="c_count"/>
+        <result property="dCount" column="d_count"/>
+        <result property="fCount" column="f_count"/>
+        <result property="lastEnrollmentDate" column="last_enrollment_date"/>
+        <result property="firstEnrollmentDate" column="first_enrollment_date"/>
+        <result property="successRatePercentage" column="success_rate_percentage"/>
+    </resultMap>
+
+    <resultMap id="courseEnrollmentTrendResultMap" type="com.school.scheduling.mapper.EnrollmentMapper$CourseEnrollmentTrend">
+        <result property="courseId" column="course_id"/>
+        <result property="courseIdentifier" column="course_identifier"/>
+        <result property="title" column="title"/>
+        <result property="level" column="level"/>
+        <result property="credits" column="credits"/>
+        <result property="departmentName" column="department_name"/>
+        <result property="totalEnrollments" column="total_enrollments"/>
+        <result property="uniqueStudents" column="unique_students"/>
+        <result property="totalOfferings" column="total_offerings"/>
+        <result property="averageEnrollmentPerOffering" column="average_enrollment_per_offering"/>
+        <result property="averageCapacityPerOffering" column="average_capacity_per_offering"/>
+        <result property="averageFillRatePercentage" column="average_fill_rate_percentage"/>
+        <result property="averageGrade" column="average_grade"/>
+        <result property="aGrades" column="a_grades"/>
+        <result property="bGrades" column="b_grades"/>
+        <result property="cGrades" column="c_grades"/>
+        <result property="dGrades" column="d_grades"/>
+        <result property="fGrades" column="f_grades"/>
+        <result property="successfulCompletions" column="successful_completions"/>
+        <result property="failedCompletions" column="failed_completions"/>
+        <result property="successRatePercentage" column="success_rate_percentage"/>
+        <result property="popularityRank" column="popularity_rank"/>
+        <result property="estimatedRevenue" column="estimated_revenue"/>
+    </resultMap>
+
+</mapper>

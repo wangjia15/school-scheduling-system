@@ -1,0 +1,391 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+    "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.school.scheduling.mapper.SemesterMapper">
+
+    <resultMap id="semesterWithDetailsResultMap" type="com.school.scheduling.domain.Semester" extends="semesterResultMap">
+        <collection property="courseOfferings" ofType="com.school.scheduling.domain.CourseOffering">
+            <id property="id" column="offering_id"/>
+            <result property="courseId" column="offering_course_id"/>
+            <result property="sectionNumber" column="offering_section_number"/>
+            <result property="teacherId" column="offering_teacher_id"/>
+            <result property="maxEnrollment" column="offering_max_enrollment"/>
+            <result property="currentEnrollment" column="offering_current_enrollment"/>
+            <result property="scheduleType" column="offering_schedule_type"/>
+            <result property="isOpen" column="offering_is_open"/>
+            <result property="syllabusUrl" column="offering_syllabus_url"/>
+        </collection>
+    </resultMap>
+
+    <!-- Complex query for semester performance analysis -->
+    <select id="getSemesterPerformanceAnalysis" resultType="com.school.scheduling.mapper.SemesterMapper$SemesterPerformance">
+        SELECT
+            s.id,
+            s.name,
+            s.academic_year,
+            s.semester_type,
+            s.start_date,
+            s.end_date,
+            s.is_current,
+            s.registration_deadline,
+            COUNT(DISTINCT co.id) as total_offerings,
+            COUNT(DISTINCT CASE WHEN co.is_open = true THEN co.id END) as open_offerings,
+            COUNT(DISTINCT CASE WHEN co.current_enrollment >= co.max_enrollment THEN co.id END) as full_offerings,
+            SUM(co.current_enrollment) as total_enrollment,
+            SUM(co.max_enrollment) as total_capacity,
+            CASE
+                WHEN SUM(co.max_enrollment) = 0 THEN 0
+                ELSE (SUM(co.current_enrollment) * 100.0 / SUM(co.max_enrollment))
+            END as enrollment_rate_percentage,
+            COUNT(DISTINCT co.teacher_id) as active_teachers,
+            AVG(co.current_enrollment) as average_class_size,
+            COUNT(DISTINCT CASE WHEN co.current_enrollment &lt; 5 THEN co.id END) as low_enrollment_offerings,
+            COUNT(DISTINCT CASE WHEN co.current_enrollment / NULLIF(co.max_enrollment, 0) &gt; 0.9 THEN co.id END) as high_enrollment_offerings,
+            -- Calculate revenue estimation (assuming $500 per credit)
+            SUM(c.credits * co.current_enrollment * 500) as estimated_revenue,
+            -- Student retention rate calculation
+            (
+                SELECT COUNT(DISTINCT e.student_id)
+                FROM enrollments e
+                JOIN course_offerings co2 ON e.course_offering_id = co2.id
+                WHERE co2.semester_id = s.id
+                AND e.status = 'COMPLETED'
+                AND e.deleted_at IS NULL
+            ) as completed_students_count
+        FROM semesters s
+        LEFT JOIN course_offerings co ON s.id = co.semester_id AND co.deleted_at IS NULL
+        LEFT JOIN courses c ON co.course_id = c.id AND c.deleted_at IS NULL
+        WHERE s.deleted_at IS NULL
+        <if test="academicYear != null">
+            AND s.academic_year = #{academicYear}
+        </if>
+        <if test="semesterType != null">
+            AND s.semester_type = #{semesterType}
+        </if>
+        GROUP BY s.id, s.name, s.academic_year, s.semester_type, s.start_date, s.end_date, s.is_current, s.registration_deadline
+        ORDER BY s.start_date DESC
+    </select>
+
+    <!-- Query for academic year progression analysis -->
+    <select id="getAcademicYearProgression" resultType="com.school.scheduling.mapper.SemesterMapper$AcademicYearProgression">
+        SELECT
+            s.academic_year,
+            COUNT(DISTINCT s.id) as semester_count,
+            COUNT(DISTINCT co.id) as total_offerings,
+            SUM(co.current_enrollment) as total_enrollment,
+            SUM(co.max_enrollment) as total_capacity,
+            CASE
+                WHEN SUM(co.max_enrollment) = 0 THEN 0
+                ELSE (SUM(co.current_enrollment) * 100.0 / SUM(co.max_enrollment))
+            END as overall_enrollment_rate,
+            COUNT(DISTINCT co.teacher_id) as unique_teachers,
+            COUNT(DISTINCT e.student_id) as unique_students,
+            AVG(c.credits) as average_credits_per_course,
+            -- Year-over-year comparison
+            LAG(SUM(co.current_enrollment)) OVER (ORDER BY s.academic_year) as previous_year_enrollment,
+            CASE
+                WHEN LAG(SUM(co.current_enrollment)) OVER (ORDER BY s.academic_year) = 0 THEN 0
+                ELSE ((SUM(co.current_enrollment) - LAG(SUM(co.current_enrollment)) OVER (ORDER BY s.academic_year)) * 100.0 /
+                     LAG(SUM(co.current_enrollment)) OVER (ORDER BY s.academic_year))
+            END as enrollment_growth_percentage,
+            -- Revenue trends
+            SUM(c.credits * co.current_enrollment * 500) as estimated_revenue,
+            LAG(SUM(c.credits * co.current_enrollment * 500)) OVER (ORDER BY s.academic_year) as previous_year_revenue
+        FROM semesters s
+        LEFT JOIN course_offerings co ON s.id = co.semester_id AND co.deleted_at IS NULL
+        LEFT JOIN courses c ON co.course_id = c.id AND c.deleted_at IS NULL
+        LEFT JOIN enrollments e ON co.id = e.course_offering_id AND e.deleted_at IS NULL
+        WHERE s.deleted_at IS NULL
+        GROUP BY s.academic_year
+        ORDER BY s.academic_year DESC
+    </select>
+
+    <!-- Query for semester scheduling readiness -->
+    <select id="getSemesterSchedulingReadiness" resultType="com.school.scheduling.mapper.SemesterMapper$SchedulingReadiness">
+        SELECT
+            s.id,
+            s.name,
+            s.academic_year,
+            s.semester_type,
+            s.start_date,
+            s.end_date,
+            s.registration_deadline,
+            s.is_current,
+            -- Scheduling status indicators
+            CASE
+                WHEN s.start_date &lt; CURRENT_DATE THEN 'COMPLETED'
+                WHEN s.start_date &gt; CURRENT_DATE + INTERVAL '3 months' THEN 'UPCOMING'
+                WHEN s.start_date &gt; CURRENT_DATE + INTERVAL '1 month' THEN 'SCHEDULING_WINDOW'
+                ELSE 'IMMEDIATE'
+            END as scheduling_status,
+            -- Course offerings preparedness
+            COUNT(DISTINCT co.id) as total_offerings,
+            COUNT(DISTINCT CASE WHEN co.teacher_id IS NOT NULL THEN co.id END) as assigned_teachers,
+            COUNT(DISTINCT CASE WHEN sch.id IS NOT NULL THEN co.id END) as scheduled_offerings,
+            COUNT(DISTINCT CASE WHEN sch.classroom_id IS NOT NULL THEN co.id END) as assigned_classrooms,
+            -- Capacity planning
+            SUM(co.max_enrollment) as planned_capacity,
+            SUM(co.current_enrollment) as current_enrollment,
+            -- Readiness metrics
+            CASE
+                WHEN COUNT(DISTINCT co.id) = 0 THEN 'NO_OFFERINGS'
+                WHEN COUNT(DISTINCT CASE WHEN co.teacher_id IS NOT NULL THEN co.id END) = COUNT(DISTINCT co.id) THEN 'TEACHERS_ASSIGNED'
+                WHEN COUNT(DISTINCT CASE WHEN co.teacher_id IS NOT NULL THEN co.id END) &gt; COUNT(DISTINCT co.id) * 0.8 THEN 'MOSTLY_ASSIGNED'
+                ELSE 'NEEDS_ASSIGNMENT'
+            END as teacher_readiness,
+            CASE
+                WHEN COUNT(DISTINCT co.id) = 0 THEN 'NO_OFFERINGS'
+                WHEN COUNT(DISTINCT CASE WHEN sch.id IS NOT NULL THEN co.id END) = COUNT(DISTINCT co.id) THEN 'FULLY_SCHEDULED'
+                WHEN COUNT(DISTINCT CASE WHEN sch.id IS NOT NULL THEN co.id END) &gt; COUNT(DISTINCT co.id) * 0.8 THEN 'MOSTLY_SCHEDULED'
+                ELSE 'NEEDS_SCHEDULING'
+            END as scheduling_readiness,
+            -- Days until semester starts
+            DATEDIFF(s.start_date, CURRENT_DATE) as days_until_start,
+            -- Days until registration deadline
+            DATEDIFF(s.registration_deadline, CURRENT_DATE) as days_until_registration_deadline
+        FROM semesters s
+        LEFT JOIN course_offerings co ON s.id = co.semester_id AND co.deleted_at IS NULL
+        LEFT JOIN schedules sch ON co.id = sch.course_offering_id AND sch.deleted_at IS NULL
+        WHERE s.deleted_at IS NULL
+        AND s.start_date >= CURRENT_DATE - INTERVAL '6 months' -- Show current and upcoming semesters
+        GROUP BY s.id, s.name, s.academic_year, s.semester_type, s.start_date, s.end_date, s.registration_deadline, s.is_current
+        ORDER BY s.start_date
+    </select>
+
+    <!-- Query for semester enrollment trends -->
+    <select id="getSemesterEnrollmentTrends" resultType="com.school.scheduling.mapper.SemesterMapper$EnrollmentTrend">
+        SELECT
+            s.id,
+            s.name,
+            s.academic_year,
+            s.semester_type,
+            s.start_date,
+            s.end_date,
+            COUNT(DISTINCT co.id) as offering_count,
+            COUNT(DISTINCT e.student_id) as enrolled_students,
+            SUM(co.current_enrollment) as total_enrollments,
+            SUM(co.max_enrollment) as total_capacity,
+            CASE
+                WHEN SUM(co.max_enrollment) = 0 THEN 0
+                ELSE (SUM(co.current_enrollment) * 100.0 / SUM(co.max_enrollment))
+            END as fill_rate_percentage,
+            -- Department-wise distribution
+            COUNT(DISTINCT CASE WHEN d.name = 'Computer Science' THEN e.student_id END) as cs_students,
+            COUNT(DISTINCT CASE WHEN d.name = 'Mathematics' THEN e.student_id END) as math_students,
+            COUNT(DISTINCT CASE WHEN d.name = 'Physics' THEN e.student_id END) as physics_students,
+            COUNT(DISTINCT CASE WHEN d.name = 'Chemistry' THEN e.student_id END) as chemistry_students,
+            -- Course level distribution
+            COUNT(DISTINCT CASE WHEN c.level = 'UNDERGRADUATE' THEN e.student_id END) as undergraduate_students,
+            COUNT(DISTINCT CASE WHEN c.level = 'GRADUATE' THEN e.student_id END) as graduate_students,
+            COUNT(DISTINCT CASE WHEN c.level = 'PHD' THEN e.student_id END) as phd_students,
+            -- Completion rates
+            COUNT(DISTINCT CASE WHEN e.status = 'COMPLETED' THEN e.student_id END) as completed_students,
+            COUNT(DISTINCT CASE WHEN e.status = 'DROPPED' THEN e.student_id END) as dropped_students,
+            CASE
+                WHEN COUNT(DISTINCT e.student_id) = 0 THEN 0
+                ELSE (COUNT(DISTINCT CASE WHEN e.status = 'COMPLETED' THEN e.student_id END) * 100.0 /
+                     COUNT(DISTINCT e.student_id))
+            END as completion_rate_percentage,
+            -- Average grades
+            AVG(e.grade) as average_grade,
+            MAX(e.grade) as highest_grade,
+            MIN(e.grade) as lowest_grade
+        FROM semesters s
+        LEFT JOIN course_offerings co ON s.id = co.semester_id AND co.deleted_at IS NULL
+        LEFT JOIN enrollments e ON co.id = e.course_offering_id AND e.deleted_at IS NULL
+        LEFT JOIN courses c ON co.course_id = c.id AND c.deleted_at IS NULL
+        LEFT JOIN students st ON e.student_id = st.id AND st.deleted_at IS NULL
+        LEFT JOIN departments d ON st.department_id = d.id AND d.deleted_at IS NULL
+        WHERE s.deleted_at IS NULL
+        AND s.start_date >= CURRENT_DATE - INTERVAL '2 years' -- Last 2 years
+        GROUP BY s.id, s.name, s.academic_year, s.semester_type, s.start_date, s.end_date
+        ORDER BY s.start_date DESC
+    </select>
+
+    <!-- Query for semester conflict analysis -->
+    <select id="getSemesterConflictAnalysis" resultType="com.school.scheduling.mapper.SemesterMapper$ConflictAnalysis">
+        SELECT
+            s.id,
+            s.name,
+            s.academic_year,
+            s.semester_type,
+            s.start_date,
+            s.end_date,
+            -- Total conflicts
+            COUNT(DISTINCT sc.id) as total_conflicts,
+            COUNT(DISTINCT CASE WHEN sc.severity = 'CRITICAL' THEN sc.id END) as critical_conflicts,
+            COUNT(DISTINCT CASE WHEN sc.severity = 'HIGH' THEN sc.id END) as high_priority_conflicts,
+            COUNT(DISTINCT CASE WHEN sc.severity = 'MEDIUM' THEN sc.id END) as medium_priority_conflicts,
+            COUNT(DISTINCT CASE WHEN sc.severity = 'LOW' THEN sc.id END) as low_priority_conflicts,
+            -- Conflict types
+            COUNT(DISTINCT CASE WHEN sc.conflict_type = 'TEACHER_DOUBLE_BOOKING' THEN sc.id END) as teacher_conflicts,
+            COUNT(DISTINCT CASE WHEN sc.conflict_type = 'CLASSROOM_DOUBLE_BOOKING' THEN sc.id END) as classroom_conflicts,
+            COUNT(DISTINCT CASE WHEN sc.conflict_type = 'STUDENT_SCHEDULE_CONFLICT' THEN sc.id END) as student_conflicts,
+            COUNT(DISTINCT CASE WHEN sc.conflict_type = 'CAPACITY_EXCEEDED' THEN sc.id END) as capacity_conflicts,
+            COUNT(DISTINCT CASE WHEN sc.conflict_type = 'TIME_SLOT_CONFLICT' THEN sc.id END) as time_conflicts,
+            -- Resolution status
+            COUNT(DISTINCT CASE WHEN sc.resolution_status = 'RESOLVED' THEN sc.id END) as resolved_conflicts,
+            COUNT(DISTINCT CASE WHEN sc.resolution_status = 'PENDING' THEN sc.id END) as pending_conflicts,
+            COUNT(DISTINCT CASE WHEN sc.resolution_status = 'IGNORED' THEN sc.id END) as ignored_conflicts,
+            COUNT(DISTINCT CASE WHEN sc.resolution_status = 'DEFERRED' THEN sc.id END) as deferred_conflicts,
+            -- Resolution metrics
+            CASE
+                WHEN COUNT(DISTINCT sc.id) = 0 THEN 0
+                ELSE (COUNT(DISTINCT CASE WHEN sc.resolution_status = 'RESOLVED' THEN sc.id END) * 100.0 /
+                     COUNT(DISTINCT sc.id))
+            END as resolution_rate_percentage,
+            -- Average resolution time
+            AVG(
+                CASE WHEN sc.resolution_status = 'RESOLVED' AND sc.resolved_at IS NOT NULL
+                THEN TIMESTAMPDIFF(HOUR, sc.detected_at, sc.resolved_at)
+                ELSE NULL END
+            ) as average_resolution_hours
+        FROM semesters s
+        LEFT JOIN schedules sch ON s.id = sch.semester_id AND sch.deleted_at IS NULL
+        LEFT JOIN schedule_conflicts sc ON (sch.id = sc.schedule_id_1 OR sch.id = sc.schedule_id_2)
+            AND sc.deleted_at IS NULL
+        WHERE s.deleted_at IS NULL
+        <if test="academicYear != null">
+            AND s.academic_year = #{academicYear}
+        </if>
+        GROUP BY s.id, s.name, s.academic_year, s.semester_type, s.start_date, s.end_date
+        ORDER BY s.start_date DESC
+    </select>
+
+    <!-- Batch operations -->
+    <insert id="batchInsert" parameterType="java.util.List">
+        INSERT INTO semesters
+        (name, academic_year, semester_type, start_date, end_date, is_current, registration_deadline, created_at, updated_at)
+        VALUES
+        <foreach collection="list" item="semester" separator=",">
+            (#{semester.name}, #{semester.academicYear}, #{semester.semesterType},
+             #{semester.startDate}, #{semester.endDate}, #{semester.isCurrent},
+             #{semester.registrationDeadline}, #{semester.createdAt}, #{semester.updatedAt})
+        </foreach>
+    </insert>
+
+    <update id="batchUpdateCurrentStatus" parameterType="java.util.List">
+        <foreach collection="list" item="update" separator=";">
+            UPDATE semesters
+            SET is_current = #{update.isCurrent},
+                updated_at = #{update.updatedAt}
+            WHERE id = #{update.id}
+        </foreach>
+    </update>
+
+    <!-- Utility result classes -->
+    <resultMap id="semesterPerformanceResultMap" type="com.school.scheduling.mapper.SemesterMapper$SemesterPerformance">
+        <result property="id" column="id"/>
+        <result property="name" column="name"/>
+        <result property="academicYear" column="academic_year"/>
+        <result property="semesterType" column="semester_type"/>
+        <result property="startDate" column="start_date"/>
+        <result property="endDate" column="end_date"/>
+        <result property="isCurrent" column="is_current"/>
+        <result property="registrationDeadline" column="registration_deadline"/>
+        <result property="totalOfferings" column="total_offerings"/>
+        <result property="openOfferings" column="open_offerings"/>
+        <result property="fullOfferings" column="full_offerings"/>
+        <result property="totalEnrollment" column="total_enrollment"/>
+        <result property="totalCapacity" column="total_capacity"/>
+        <result property="enrollmentRatePercentage" column="enrollment_rate_percentage"/>
+        <result property="activeTeachers" column="active_teachers"/>
+        <result property="averageClassSize" column="average_class_size"/>
+        <result property="lowEnrollmentOfferings" column="low_enrollment_offerings"/>
+        <result property="highEnrollmentOfferings" column="high_enrollment_offerings"/>
+        <result property="estimatedRevenue" column="estimated_revenue"/>
+        <result property="completedStudentsCount" column="completed_students_count"/>
+    </resultMap>
+
+    <resultMap id="academicYearProgressionResultMap" type="com.school.scheduling.mapper.SemesterMapper$AcademicYearProgression">
+        <result property="academicYear" column="academic_year"/>
+        <result property="semesterCount" column="semester_count"/>
+        <result property="totalOfferings" column="total_offerings"/>
+        <result property="totalEnrollment" column="total_enrollment"/>
+        <result property="totalCapacity" column="total_capacity"/>
+        <result property="overallEnrollmentRate" column="overall_enrollment_rate"/>
+        <result property="uniqueTeachers" column="unique_teachers"/>
+        <result property="uniqueStudents" column="unique_students"/>
+        <result property="averageCreditsPerCourse" column="average_credits_per_course"/>
+        <result property="previousYearEnrollment" column="previous_year_enrollment"/>
+        <result property="enrollmentGrowthPercentage" column="enrollment_growth_percentage"/>
+        <result property="estimatedRevenue" column="estimated_revenue"/>
+        <result property="previousYearRevenue" column="previous_year_revenue"/>
+    </resultMap>
+
+    <resultMap id="schedulingReadinessResultMap" type="com.school.scheduling.mapper.SemesterMapper$SchedulingReadiness">
+        <result property="id" column="id"/>
+        <result property="name" column="name"/>
+        <result property="academicYear" column="academic_year"/>
+        <result property="semesterType" column="semester_type"/>
+        <result property="startDate" column="start_date"/>
+        <result property="endDate" column="end_date"/>
+        <result property="registrationDeadline" column="registration_deadline"/>
+        <result property="isCurrent" column="is_current"/>
+        <result property="schedulingStatus" column="scheduling_status"/>
+        <result property="totalOfferings" column="total_offerings"/>
+        <result property="assignedTeachers" column="assigned_teachers"/>
+        <result property="scheduledOfferings" column="scheduled_offerings"/>
+        <result property="assignedClassrooms" column="assigned_classrooms"/>
+        <result property="plannedCapacity" column="planned_capacity"/>
+        <result property="currentEnrollment" column="current_enrollment"/>
+        <result property="teacherReadiness" column="teacher_readiness"/>
+        <result property="schedulingReadiness" column="scheduling_readiness"/>
+        <result property="daysUntilStart" column="days_until_start"/>
+        <result property="daysUntilRegistrationDeadline" column="days_until_registration_deadline"/>
+    </resultMap>
+
+    <resultMap id="enrollmentTrendResultMap" type="com.school.scheduling.mapper.SemesterMapper$EnrollmentTrend">
+        <result property="id" column="id"/>
+        <result property="name" column="name"/>
+        <result property="academicYear" column="academic_year"/>
+        <result property="semesterType" column="semester_type"/>
+        <result property="startDate" column="start_date"/>
+        <result property="endDate" column="end_date"/>
+        <result property="offeringCount" column="offering_count"/>
+        <result property="enrolledStudents" column="enrolled_students"/>
+        <result property="totalEnrollments" column="total_enrollments"/>
+        <result property="totalCapacity" column="total_capacity"/>
+        <result property="fillRatePercentage" column="fill_rate_percentage"/>
+        <result property="csStudents" column="cs_students"/>
+        <result property="mathStudents" column="math_students"/>
+        <result property="physicsStudents" column="physics_students"/>
+        <result property="chemistryStudents" column="chemistry_students"/>
+        <result property="undergraduateStudents" column="undergraduate_students"/>
+        <result property="graduateStudents" column="graduate_students"/>
+        <result property="phdStudents" column="phd_students"/>
+        <result property="completedStudents" column="completed_students"/>
+        <result property="droppedStudents" column="dropped_students"/>
+        <result property="completionRatePercentage" column="completion_rate_percentage"/>
+        <result property="averageGrade" column="average_grade"/>
+        <result property="highestGrade" column="highest_grade"/>
+        <result property="lowestGrade" column="lowest_grade"/>
+    </resultMap>
+
+    <resultMap id="conflictAnalysisResultMap" type="com.school.scheduling.mapper.SemesterMapper$ConflictAnalysis">
+        <result property="id" column="id"/>
+        <result property="name" column="name"/>
+        <result property="academicYear" column="academic_year"/>
+        <result property="semesterType" column="semester_type"/>
+        <result property="startDate" column="start_date"/>
+        <result property="endDate" column="end_date"/>
+        <result property="totalConflicts" column="total_conflicts"/>
+        <result property="criticalConflicts" column="critical_conflicts"/>
+        <result property="highPriorityConflicts" column="high_priority_conflicts"/>
+        <result property="mediumPriorityConflicts" column="medium_priority_conflicts"/>
+        <result property="lowPriorityConflicts" column="low_priority_conflicts"/>
+        <result property="teacherConflicts" column="teacher_conflicts"/>
+        <result property="classroomConflicts" column="classroom_conflicts"/>
+        <result property="studentConflicts" column="student_conflicts"/>
+        <result property="capacityConflicts" column="capacity_conflicts"/>
+        <result property="timeConflicts" column="time_conflicts"/>
+        <result property="resolvedConflicts" column="resolved_conflicts"/>
+        <result property="pendingConflicts" column="pending_conflicts"/>
+        <result property="ignoredConflicts" column="ignored_conflicts"/>
+        <result property="deferredConflicts" column="deferred_conflicts"/>
+        <result property="resolutionRatePercentage" column="resolution_rate_percentage"/>
+        <result property="averageResolutionHours" column="average_resolution_hours"/>
+    </resultMap>
+
+</mapper>

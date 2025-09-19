@@ -1,0 +1,305 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+    "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.school.scheduling.mapper.ConstraintMapper">
+
+    <!-- Result Maps -->
+    <resultMap id="constraintWithDetailsResultMap" type="com.school.scheduling.domain.SchedulingConstraint">
+        <id property="id" column="id"/>
+        <result property="name" column="name"/>
+        <result property="description" column="description"/>
+        <result property="constraintType" column="constraint_type"/>
+        <result property="entityId" column="entity_id"/>
+        <result property="entityType" column="entity_type"/>
+        <result property="constraintData" column="constraint_data"/>
+        <result property="isActive" column="is_active"/>
+        <result property="priority" column="priority"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+        <result property="deletedAt" column="deleted_at"/>
+
+        <!-- Entity Association (dynamic based on entity_type) -->
+        <association property="entity" javaType="java.lang.Object">
+            <id property="id" column="entity_id"/>
+        </association>
+    </resultMap>
+
+    <!-- Base Columns -->
+    <sql id="constraintColumns">
+        c.id, c.name, c.description, c.constraint_type, c.entity_id, c.entity_type,
+        c.constraint_data, c.is_active, c.priority, c.created_at, c.updated_at, c.deleted_at
+    </sql>
+
+    <!-- Complex Constraint Validation Queries -->
+    <select id="validateConstraintsForSchedule" resultType="java.util.Map">
+        SELECT
+            'TEACHER_AVAILABILITY' as constraint_type,
+            COUNT(*) as violation_count
+        FROM scheduling_constraints c
+        JOIN teachers t ON c.entity_id = t.id
+        JOIN users u ON t.user_id = u.id
+        WHERE c.constraint_type = 'TEACHER_AVAILABILITY'
+        AND c.entity_type = 'TEACHER'
+        AND c.is_active = true
+        AND c.deleted_at IS NULL
+        AND t.id = #{teacherId}
+        AND JSON_CONTAINS(c.constraint_data, JSON_OBJECT('day_of_week', #{dayOfWeek}))
+        AND JSON_CONTAINS(c.constraint_data, JSON_OBJECT('start_time', #{startTime}))
+
+        UNION ALL
+
+        SELECT
+            'CLASSROOM_AVAILABILITY' as constraint_type,
+            COUNT(*) as violation_count
+        FROM scheduling_constraints c
+        JOIN classrooms cr ON c.entity_id = cr.id
+        WHERE c.constraint_type = 'CLASSROOM_AVAILABILITY'
+        AND c.entity_type = 'CLASSROOM'
+        AND c.is_active = true
+        AND c.deleted_at IS NULL
+        AND cr.id = #{classroomId}
+        AND JSON_CONTAINS(c.constraint_data, JSON_OBJECT('day_of_week', #{dayOfWeek}))
+
+        UNION ALL
+
+        SELECT
+            'CAPACITY_LIMIT' as constraint_type,
+            CASE
+                WHEN JSON_EXTRACT(c.constraint_data, '$.max_capacity') &lt; #{enrollmentCount} THEN 1
+                ELSE 0
+            END as violation_count
+        FROM scheduling_constraints c
+        WHERE c.constraint_type = 'CAPACITY_LIMIT'
+        AND c.entity_type = 'CLASSROOM'
+        AND c.is_active = true
+        AND c.deleted_at IS NULL
+        AND c.entity_id = #{classroomId}
+
+        UNION ALL
+
+        SELECT
+            'DEPARTMENT_RESTRICTION' as constraint_type,
+            COUNT(*) as violation_count
+        FROM scheduling_constraints c
+        JOIN departments d ON c.entity_id = d.id
+        JOIN teachers t ON t.department_id = d.id
+        WHERE c.constraint_type = 'DEPARTMENT_RESTRICTION'
+        AND c.entity_type = 'DEPARTMENT'
+        AND c.is_active = true
+        AND c.deleted_at IS NULL
+        AND t.id = #{teacherId}
+        AND JSON_CONTAINS(c.constraint_data, JSON_ARRAY(#{restrictedSubject}))
+    </select>
+
+    <!-- Advanced JSON-based Constraint Queries -->
+    <select id="findConstraintsByJsonField" resultMap="constraintWithDetailsResultMap">
+        SELECT <include refid="constraintColumns"/>
+        FROM scheduling_constraints c
+        WHERE c.is_active = true
+        AND c.deleted_at IS NULL
+        AND c.constraint_type = #{constraintType}
+        <if test="jsonField != null and jsonValue != null">
+            AND JSON_CONTAINS(c.constraint_data, JSON_OBJECT(#{jsonField}, #{jsonValue}))
+        </if>
+        <if test="entityId != null">
+            AND c.entity_id = #{entityId}
+        </if>
+        ORDER BY c.priority
+    </select>
+
+    <!-- Constraint Dependency Analysis -->
+    <select id="analyzeConstraintDependencies" resultType="java.util.Map">
+        SELECT
+            c.id as constraint_id,
+            c.name as constraint_name,
+            c.constraint_type,
+            c.entity_type,
+            c.priority,
+            JSON_LENGTH(c.constraint_data) as json_field_count,
+            JSON_KEYS(c.constraint_data) as json_fields,
+            COUNT(s.id) as affected_schedules_count,
+            COUNT(DISTINCT sc.id) as related_conflicts_count
+        FROM scheduling_constraints c
+        LEFT JOIN schedules s ON JSON_CONTAINS(c.constraint_data, JSON_OBJECT('teacher_id', s.id))
+        LEFT JOIN schedule_conflicts sc ON c.id = sc.entity_id AND sc.entity_type = 'CONSTRAINT'
+        WHERE c.is_active = true
+        AND c.deleted_at IS NULL
+        GROUP BY c.id, c.name, c.constraint_type, c.entity_type, c.priority, c.constraint_data
+        ORDER BY c.priority, affected_schedules_count DESC
+    </select>
+
+    <!-- Constraint Effectiveness Analysis -->
+    <select id="getConstraintEffectivenessReport" resultType="java.util.Map">
+        WITH constraint_impact AS (
+            SELECT
+                c.id,
+                c.name,
+                c.constraint_type,
+                c.priority,
+                COUNT(sc.id) as prevented_conflicts,
+                COUNT(DISTINCT s.id) as affected_schedules
+            FROM scheduling_constraints c
+            LEFT JOIN schedule_conflicts sc ON c.id = sc.entity_id AND sc.entity_type = 'CONSTRAINT'
+            LEFT JOIN schedules s ON (
+                (c.constraint_type = 'TEACHER_AVAILABILITY' AND JSON_CONTAINS(c.constraint_data, JSON_OBJECT('teacher_id', s.id))) OR
+                (c.constraint_type = 'CLASSROOM_AVAILABILITY' AND c.entity_id = s.classroom_id)
+            )
+            WHERE c.is_active = true
+            AND c.deleted_at IS NULL
+            GROUP BY c.id, c.name, c.constraint_type, c.priority
+        )
+        SELECT
+            constraint_type,
+            COUNT(*) as constraint_count,
+            AVG(prevented_conflicts) as avg_prevented_conflicts,
+            AVG(affected_schedules) as avg_affected_schedules,
+            SUM(prevented_conflicts) as total_prevented_conflicts,
+            SUM(affected_schedules) as total_affected_schedules
+        FROM constraint_impact
+        GROUP BY constraint_type
+        ORDER BY total_prevented_conflicts DESC
+    </select>
+
+    <!-- Bulk Constraint Validation -->
+    <select id="validateMultipleConstraints" resultType="java.util.Map">
+        SELECT
+            c.id as constraint_id,
+            c.name as constraint_name,
+            c.constraint_type,
+            c.entity_id,
+            c.entity_type,
+            CASE
+                <when test="validationData.teacherId != null">
+                    WHEN c.constraint_type = 'TEACHER_AVAILABILITY' AND
+                         JSON_CONTAINS(c.constraint_data, JSON_OBJECT('day_of_week', #{validationData.dayOfWeek})) AND
+                         JSON_CONTAINS(c.constraint_data, JSON_OBJECT('start_time', #{validationData.startTime})) AND
+                         c.entity_id = #{validationData.teacherId}
+                    THEN 'VIOLATED'
+                </when>
+                <when test="validationData.classroomId != null">
+                    WHEN c.constraint_type = 'CLASSROOM_AVAILABILITY' AND
+                         JSON_CONTAINS(c.constraint_data, JSON_OBJECT('day_of_week', #{validationData.dayOfWeek})) AND
+                         c.entity_id = #{validationData.classroomId}
+                    THEN 'VIOLATED'
+                </when>
+                <when test="validationData.enrollmentCount != null">
+                    WHEN c.constraint_type = 'CAPACITY_LIMIT' AND
+                         JSON_EXTRACT(c.constraint_data, '$.max_capacity') &lt; #{validationData.enrollmentCount} AND
+                         c.entity_id = #{validationData.classroomId}
+                    THEN 'VIOLATED'
+                </when>
+                <otherwise>'VALID'</otherwise>
+            END as validation_result,
+            c.priority as constraint_priority
+        FROM scheduling_constraints c
+        WHERE c.is_active = true
+        AND c.deleted_at IS NULL
+        AND (
+            <if test="validationData.teacherId != null">
+                (c.constraint_type = 'TEACHER_AVAILABILITY' AND c.entity_id = #{validationData.teacherId}) OR
+            </if>
+            <if test="validationData.classroomId != null">
+                (c.constraint_type = 'CLASSROOM_AVAILABILITY' AND c.entity_id = #{validationData.classroomId}) OR
+                (c.constraint_type = 'CAPACITY_LIMIT' AND c.entity_id = #{validationData.classroomId}) OR
+            </if>
+            c.constraint_type IN ('DEPARTMENT_RESTRICTION', 'STUDENT_CONFLICT')
+        )
+        ORDER BY c.priority, validation_result
+    </select>
+
+    <!-- Constraint Pattern Recognition -->
+    <select id="findSimilarConstraints" resultMap="constraintWithDetailsResultMap">
+        SELECT <include refid="constraintColumns"/>
+        FROM scheduling_constraints c
+        WHERE c.is_active = true
+        AND c.deleted_at IS NULL
+        AND c.constraint_type = #{constraintType}
+        AND c.id != #{excludeConstraintId}
+        AND (
+            JSON_CONTAINS(c.constraint_data, JSON_EXTRACT(#{referenceConstraintData}, '$')) OR
+            JSON_CONTAINS(#{referenceConstraintData}, JSON_EXTRACT(c.constraint_data, '$'))
+        )
+        ORDER BY c.priority
+    </select>
+
+    <!-- Constraint Impact Analysis by Department -->
+    <select id="getDepartmentConstraintImpact" resultType="java.util.Map">
+        SELECT
+            d.id as department_id,
+            d.name as department_name,
+            COUNT(DISTINCT c.id) as constraint_count,
+            COUNT(DISTINCT t.id) as affected_teachers_count,
+            COUNT(DISTINCT s.id) as affected_schedules_count,
+            AVG(c.priority) as avg_constraint_priority
+        FROM departments d
+        LEFT JOIN teachers t ON d.id = t.department_id AND t.deleted_at IS NULL
+        LEFT JOIN scheduling_constraints c ON (
+            (c.constraint_type = 'TEACHER_AVAILABILITY' AND c.entity_id = t.id) OR
+            (c.constraint_type = 'DEPARTMENT_RESTRICTION' AND c.entity_id = d.id)
+        ) AND c.is_active = true AND c.deleted_at IS NULL
+        LEFT JOIN schedules s ON t.id = (SELECT co.teacher_id FROM course_offerings co WHERE co.id = s.course_offering_id)
+        WHERE d.deleted_at IS NULL
+        GROUP BY d.id, d.name
+        ORDER BY affected_teachers_count DESC
+    </select>
+
+    <!-- Constraint Optimization Suggestions -->
+    <select id="getConstraintOptimizationSuggestions" resultType="java.util.Map">
+        WITH constraint_analysis AS (
+            SELECT
+                c.id,
+                c.name,
+                c.constraint_type,
+                c.priority,
+                c.constraint_data,
+                COUNT(DISTINCT s.id) as affected_schedules,
+                COUNT(DISTINCT sc.id) as related_conflicts
+            FROM scheduling_constraints c
+            LEFT JOIN schedules s ON (
+                (c.constraint_type = 'TEACHER_AVAILABILITY' AND JSON_CONTAINS(c.constraint_data, JSON_OBJECT('teacher_id', s.id))) OR
+                (c.constraint_type = 'CLASSROOM_AVAILABILITY' AND c.entity_id = s.classroom_id)
+            )
+            LEFT JOIN schedule_conflicts sc ON (
+                (sc.entity_id = c.id AND sc.entity_type = 'CONSTRAINT') OR
+                (sc.schedule_id_1 IN (SELECT id FROM schedules WHERE JSON_CONTAINS(c.constraint_data, JSON_OBJECT('teacher_id', id)))) OR
+                (sc.schedule_id_2 IN (SELECT id FROM schedules WHERE JSON_CONTAINS(c.constraint_data, JSON_OBJECT('teacher_id', id))))
+            )
+            WHERE c.is_active = true
+            AND c.deleted_at IS NULL
+            GROUP BY c.id, c.name, c.constraint_type, c.priority, c.constraint_data
+        )
+        SELECT
+            id,
+            name,
+            constraint_type,
+            priority,
+            affected_schedules,
+            related_conflicts,
+            CASE
+                WHEN affected_schedules = 0 THEN 'REMOVE_UNUSED'
+                WHEN related_conflicts > affected_schedules * 0.5 THEN 'REVIEW_PRIORITY'
+                WHEN priority = 1 AND affected_schedules > 50 THEN 'OPTIMIZE_PERFORMANCE'
+                WHEN JSON_LENGTH(constraint_data) > 5 THEN 'SIMPLIFY_RULES'
+                ELSE 'MAINTAIN'
+            END as suggestion,
+            CASE
+                WHEN affected_schedules = 0 THEN 'This constraint does not affect any schedules'
+                WHEN related_conflicts > affected_schedules * 0.5 THEN 'High conflict ratio detected'
+                WHEN priority = 1 AND affected_schedules > 50 THEN 'High-priority constraint affects many schedules'
+                WHEN JSON_LENGTH(constraint_data) > 5 THEN 'Complex constraint with many rules'
+                ELSE 'No optimization needed'
+            END as reason
+        FROM constraint_analysis
+        ORDER BY
+            CASE suggestion
+                WHEN 'REMOVE_UNUSED' THEN 1
+                WHEN 'REVIEW_PRIORITY' THEN 2
+                WHEN 'OPTIMIZE_PERFORMANCE' THEN 3
+                WHEN 'SIMPLIFY_RULES' THEN 4
+                ELSE 5
+            END,
+            related_conflicts DESC
+    </select>
+
+</mapper>

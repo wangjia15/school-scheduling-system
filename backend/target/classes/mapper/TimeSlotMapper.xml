@@ -1,0 +1,310 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+    "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.school.scheduling.mapper.TimeSlotMapper">
+
+    <resultMap id="timeSlotWithDetailsResultMap" type="com.school.scheduling.domain.TimeSlot" extends="timeSlotResultMap">
+        <collection property="schedules" ofType="com.school.scheduling.domain.Schedule">
+            <id property="id" column="schedule_id"/>
+            <result property="courseOfferingId" column="schedule_course_offering_id"/>
+            <result property="classroomId" column="schedule_classroom_id"/>
+            <result property="semesterId" column="schedule_semester_id"/>
+            <result property="isActive" column="schedule_is_active"/>
+        </collection>
+    </resultMap>
+
+    <!-- Complex query for time slot utilization analysis -->
+    <select id="getTimeSlotUtilizationAnalysis" resultType="com.school.scheduling.mapper.TimeSlotMapper$UtilizationAnalysis">
+        SELECT
+            ts.id,
+            ts.day_of_week,
+            ts.start_time,
+            ts.end_time,
+            ts.slot_type,
+            ts.is_active,
+            COUNT(DISTINCT s.id) as schedule_count,
+            COUNT(DISTINCT s.course_offering_id) as unique_courses_count,
+            COUNT(DISTINCT s.teacher_id) as unique_teachers_count,
+            COUNT(DISTINCT s.classroom_id) as unique_classrooms_count,
+            SUM(co.current_enrollment) as total_students,
+            AVG(co.current_enrollment) as average_students_per_slot,
+            MAX(co.current_enrollment) as max_students_in_slot,
+            MIN(co.current_enrollment) as min_students_in_slot,
+            -- Utilization rate based on expected class capacity
+            CASE
+                WHEN COUNT(DISTINCT s.id) = 0 THEN 0
+                WHEN COUNT(DISTINCT s.id) = 1 THEN 100
+                ELSE (COUNT(DISTINCT s.id) * 50) -- Overbooked slots get lower utilization
+            END as utilization_rate_percentage,
+            -- Peak hours identification
+            CASE
+                WHEN ts.start_time BETWEEN '08:00:00' AND '10:00:00' THEN 'EARLY_MORNING'
+                WHEN ts.start_time BETWEEN '10:00:00' AND '12:00:00' THEN 'LATE_MORNING'
+                WHEN ts.start_time BETWEEN '12:00:00' AND '14:00:00' THEN 'EARLY_AFTERNOON'
+                WHEN ts.start_time BETWEEN '14:00:00' AND '17:00:00' THEN 'LATE_AFTERNOON'
+                ELSE 'EVENING'
+            END as time_category,
+            -- Conflict detection
+            COUNT(DISTINCT sc.id) as conflict_count,
+            COUNT(DISTINCT CASE WHEN sc.severity = 'CRITICAL' THEN sc.id END) as critical_conflict_count
+        FROM time_slots ts
+        LEFT JOIN schedules s ON ts.id = s.time_slot_id AND s.deleted_at IS NULL
+        LEFT JOIN course_offerings co ON s.course_offering_id = co.id AND co.deleted_at IS NULL
+        LEFT JOIN schedule_conflicts sc ON s.id = sc.schedule_id_1 OR s.id = sc.schedule_id_2
+            AND sc.deleted_at IS NULL
+        WHERE ts.deleted_at IS NULL
+        AND ts.is_active = true
+        <if test="semesterId != null">
+            AND (s.semester_id = #{semesterId} OR s.semester_id IS NULL)
+        </if>
+        GROUP BY ts.id, ts.day_of_week, ts.start_time, ts.end_time, ts.slot_type, ts.is_active
+        HAVING schedule_count > 0 OR conflict_count > 0
+        ORDER BY
+            CASE ts.day_of_week
+                WHEN 'MONDAY' THEN 1
+                WHEN 'TUESDAY' THEN 2
+                WHEN 'WEDNESDAY' THEN 3
+                WHEN 'THURSDAY' THEN 4
+                WHEN 'FRIDAY' THEN 5
+                WHEN 'SATURDAY' THEN 6
+                WHEN 'SUNDAY' THEN 7
+                ELSE 8
+            END,
+            ts.start_time
+    </select>
+
+    <!-- Query for time slot conflict detection -->
+    <select id="findTimeSlotConflicts" resultType="com.school.scheduling.mapper.TimeSlotMapper$TimeSlotConflict">
+        SELECT
+            ts.id as time_slot_id,
+            ts.day_of_week,
+            ts.start_time,
+            ts.end_time,
+            ts.slot_type,
+            GROUP_CONCAT(DISTINCT s.id) as conflicting_schedule_ids,
+            GROUP_CONCAT(DISTINCT co.course_identifier) as conflicting_course_codes,
+            GROUP_CONCAT(DISTINCT CONCAT(t.first_name, ' ', t.last_name)) as conflicting_teachers,
+            GROUP_CONCAT(DISTINCT cr.room_number) as conflicting_classrooms,
+            COUNT(DISTINCT s.id) as conflict_severity,
+            CASE
+                WHEN COUNT(DISTINCT s.id) = 1 THEN 'NO_CONFLICT'
+                WHEN COUNT(DISTINCT s.id) = 2 THEN 'DOUBLE_BOOKING'
+                ELSE 'MULTIPLE_CONFLICTS'
+            END as conflict_type
+        FROM time_slots ts
+        JOIN schedules s ON ts.id = s.time_slot_id AND s.deleted_at IS NULL
+        JOIN course_offerings co ON s.course_offering_id = co.id AND co.deleted_at IS NULL
+        LEFT JOIN teachers t ON s.teacher_id = t.id AND t.deleted_at IS NULL
+        LEFT JOIN classrooms cr ON s.classroom_id = cr.id AND cr.deleted_at IS NULL
+        WHERE ts.deleted_at IS NULL
+        AND ts.is_active = true
+        <if test="semesterId != null">
+            AND s.semester_id = #{semesterId}
+        </if>
+        GROUP BY ts.id, ts.day_of_week, ts.start_time, ts.end_time, ts.slot_type
+        HAVING COUNT(DISTINCT s.id) > 1
+        ORDER BY conflict_severity DESC, ts.day_of_week, ts.start_time
+    </select>
+
+    <!-- Query for optimal time slot recommendations -->
+    <select id="getOptimalTimeSlotRecommendations" resultType="com.school.scheduling.mapper.TimeSlotMapper$TimeSlotRecommendation">
+        SELECT
+            ts.id,
+            ts.day_of_week,
+            ts.start_time,
+            ts.end_time,
+            ts.slot_type,
+            -- Scoring factors
+            CASE
+                WHEN COUNT(s.id) = 0 THEN 100 -- Completely available
+                WHEN COUNT(s.id) = 1 THEN 70 -- Lightly used
+                WHEN COUNT(s.id) = 2 THEN 40 -- Moderately used
+                ELSE 10 -- Heavily used
+            END as availability_score,
+            CASE
+                WHEN ts.start_time BETWEEN '09:00:00' AND '15:00:00' THEN 90 -- Prime time
+                WHEN ts.start_time BETWEEN '08:00:00' AND '17:00:00' THEN 70 -- Business hours
+                ELSE 50 -- Extended hours
+            END as time_preference_score,
+            CASE
+                WHEN ts.day_of_week IN ('MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY') THEN 80
+                WHEN ts.day_of_week = 'FRIDAY' THEN 70
+                ELSE 40
+            END as day_preference_score,
+            -- Total recommendation score
+            (
+                CASE
+                    WHEN COUNT(s.id) = 0 THEN 100
+                    WHEN COUNT(s.id) = 1 THEN 70
+                    WHEN COUNT(s.id) = 2 THEN 40
+                    ELSE 10
+                END +
+                CASE
+                    WHEN ts.start_time BETWEEN '09:00:00' AND '15:00:00' THEN 90
+                    WHEN ts.start_time BETWEEN '08:00:00' AND '17:00:00' THEN 70
+                    ELSE 50
+                END +
+                CASE
+                    WHEN ts.day_of_week IN ('MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY') THEN 80
+                    WHEN ts.day_of_week = 'FRIDAY' THEN 70
+                    ELSE 40
+                END
+            ) / 3 as recommendation_score,
+            -- Current usage
+            COUNT(s.id) as current_schedule_count,
+            COUNT(DISTINCT s.teacher_id) as current_teacher_count,
+            COUNT(DISTINCT s.classroom_id) as current_classroom_count,
+            -- Suitability for different course levels
+            CASE
+                WHEN ts.start_time BETWEEN '08:00:00' AND '12:00:00' THEN 'UNDERGRADUATE_FRIENDLY'
+                WHEN ts.start_time BETWEEN '13:00:00' AND '17:00:00' THEN 'GRADUATE_FRIENDLY'
+                ELSE 'FLEXIBLE'
+            END as course_level_suitability
+        FROM time_slots ts
+        LEFT JOIN schedules s ON ts.id = s.time_slot_id AND s.deleted_at IS NULL
+        <if test="semesterId != null">
+            LEFT JOIN semesters sem ON s.semester_id = sem.id AND sem.id = #{semesterId}
+        </if>
+        WHERE ts.deleted_at IS NULL
+        AND ts.is_active = true
+        GROUP BY ts.id, ts.day_of_week, ts.start_time, ts.end_time, ts.slot_type
+        HAVING current_schedule_count &lt;= #{maxSchedulesPerSlot}
+        ORDER BY recommendation_score DESC, ts.day_of_week, ts.start_time
+    </select>
+
+    <!-- Query for time slot usage patterns -->
+    <select id="getTimeSlotUsagePatterns" resultType="com.school.scheduling.mapper.TimeSlotMapper$UsagePattern">
+        SELECT
+            ts.day_of_week,
+            ts.slot_type,
+            COUNT(DISTINCT ts.id) as total_time_slots,
+            COUNT(DISTINCT s.id) as total_schedules,
+            COUNT(DISTINCT s.course_offering_id) as unique_courses,
+            COUNT(DISTINCT s.teacher_id) as unique_teachers,
+            COUNT(DISTINCT s.classroom_id) as unique_classrooms,
+            SUM(co.current_enrollment) as total_students_enrolled,
+            AVG(co.current_enrollment) as average_class_size,
+            -- Usage efficiency
+            CASE
+                WHEN COUNT(DISTINCT ts.id) = 0 THEN 0
+                ELSE (COUNT(DISTINCT s.id) * 100.0 / COUNT(DISTINCT ts.id))
+            END as utilization_rate,
+            -- Peak usage identification
+            MAX(COUNT(DISTINCT s.id)) OVER (PARTITION BY ts.day_of_week) as peak_usage_for_day,
+            -- Time slot efficiency
+            AVG(TIME_TO_SEC(ts.end_time) - TIME_TO_SEC(ts.start_time)) / 60 as average_duration_minutes,
+            -- Revenue potential (assuming $500 per credit per student)
+            SUM(c.credits * co.current_enrollment * 500) as estimated_revenue
+        FROM time_slots ts
+        LEFT JOIN schedules s ON ts.id = s.time_slot_id AND s.deleted_at IS NULL
+        LEFT JOIN course_offerings co ON s.course_offering_id = co.id AND co.deleted_at IS NULL
+        LEFT JOIN courses c ON co.course_id = c.id AND c.deleted_at IS NULL
+        WHERE ts.deleted_at IS NULL
+        <if test="semesterId != null">
+            AND (s.semester_id = #{semesterId} OR s.semester_id IS NULL)
+        </if>
+        GROUP BY ts.day_of_week, ts.slot_type
+        ORDER BY
+            CASE ts.day_of_week
+                WHEN 'MONDAY' THEN 1
+                WHEN 'TUESDAY' THEN 2
+                WHEN 'WEDNESDAY' THEN 3
+                WHEN 'THURSDAY' THEN 4
+                WHEN 'FRIDAY' THEN 5
+                WHEN 'SATURDAY' THEN 6
+                WHEN 'SUNDAY' THEN 7
+                ELSE 8
+            END,
+            ts.slot_type
+    </select>
+
+    <!-- Batch operations -->
+    <insert id="batchInsert" parameterType="java.util.List">
+        INSERT INTO time_slots
+        (day_of_week, start_time, end_time, slot_type, is_active, created_at, updated_at)
+        VALUES
+        <foreach collection="list" item="slot" separator=",">
+            (#{slot.dayOfWeek}, #{slot.startTime}, #{slot.endTime},
+             #{slot.slotType}, #{slot.isActive}, #{slot.createdAt}, #{slot.updatedAt})
+        </foreach>
+    </insert>
+
+    <update id="batchUpdateActiveStatus" parameterType="java.util.List">
+        <foreach collection="list" item="update" separator=";">
+            UPDATE time_slots
+            SET is_active = #{update.isActive},
+                updated_at = #{update.updatedAt}
+            WHERE id = #{update.id}
+        </foreach>
+    </update>
+
+    <!-- Utility result classes -->
+    <resultMap id="utilizationAnalysisResultMap" type="com.school.scheduling.mapper.TimeSlotMapper$UtilizationAnalysis">
+        <result property="id" column="id"/>
+        <result property="dayOfWeek" column="day_of_week"/>
+        <result property="startTime" column="start_time"/>
+        <result property="endTime" column="end_time"/>
+        <result property="slotType" column="slot_type"/>
+        <result property="isActive" column="is_active"/>
+        <result property="scheduleCount" column="schedule_count"/>
+        <result property="uniqueCoursesCount" column="unique_courses_count"/>
+        <result property="uniqueTeachersCount" column="unique_teachers_count"/>
+        <result property="uniqueClassroomsCount" column="unique_classrooms_count"/>
+        <result property="totalStudents" column="total_students"/>
+        <result property="averageStudentsPerSlot" column="average_students_per_slot"/>
+        <result property="maxStudentsInSlot" column="max_students_in_slot"/>
+        <result property="minStudentsInSlot" column="min_students_in_slot"/>
+        <result property="utilizationRatePercentage" column="utilization_rate_percentage"/>
+        <result property="timeCategory" column="time_category"/>
+        <result property="conflictCount" column="conflict_count"/>
+        <result property="criticalConflictCount" column="critical_conflict_count"/>
+    </resultMap>
+
+    <resultMap id="timeSlotConflictResultMap" type="com.school.scheduling.mapper.TimeSlotMapper$TimeSlotConflict">
+        <result property="timeSlotId" column="time_slot_id"/>
+        <result property="dayOfWeek" column="day_of_week"/>
+        <result property="startTime" column="start_time"/>
+        <result property="endTime" column="end_time"/>
+        <result property="slotType" column="slot_type"/>
+        <result property="conflictingScheduleIds" column="conflicting_schedule_ids"/>
+        <result property="conflictingCourseCodes" column="conflicting_course_codes"/>
+        <result property="conflictingTeachers" column="conflicting_teachers"/>
+        <result property="conflictingClassrooms" column="conflicting_classrooms"/>
+        <result property="conflictSeverity" column="conflict_severity"/>
+        <result property="conflictType" column="conflict_type"/>
+    </resultMap>
+
+    <resultMap id="timeSlotRecommendationResultMap" type="com.school.scheduling.mapper.TimeSlotMapper$TimeSlotRecommendation">
+        <result property="id" column="id"/>
+        <result property="dayOfWeek" column="day_of_week"/>
+        <result property="startTime" column="start_time"/>
+        <result property="endTime" column="end_time"/>
+        <result property="slotType" column="slot_type"/>
+        <result property="availabilityScore" column="availability_score"/>
+        <result property="timePreferenceScore" column="time_preference_score"/>
+        <result property="dayPreferenceScore" column="day_preference_score"/>
+        <result property="recommendationScore" column="recommendation_score"/>
+        <result property="currentScheduleCount" column="current_schedule_count"/>
+        <result property="currentTeacherCount" column="current_teacher_count"/>
+        <result property="currentClassroomCount" column="current_classroom_count"/>
+        <result property="courseLevelSuitability" column="course_level_suitability"/>
+    </resultMap>
+
+    <resultMap id="usagePatternResultMap" type="com.school.scheduling.mapper.TimeSlotMapper$UsagePattern">
+        <result property="dayOfWeek" column="day_of_week"/>
+        <result property="slotType" column="slot_type"/>
+        <result property="totalTimeSlots" column="total_time_slots"/>
+        <result property="totalSchedules" column="total_schedules"/>
+        <result property="uniqueCourses" column="unique_courses"/>
+        <result property="uniqueTeachers" column="unique_teachers"/>
+        <result property="uniqueClassrooms" column="unique_classrooms"/>
+        <result property="totalStudentsEnrolled" column="total_students_enrolled"/>
+        <result property="averageClassSize" column="average_class_size"/>
+        <result property="utilizationRate" column="utilization_rate"/>
+        <result property="peakUsageForDay" column="peak_usage_for_day"/>
+        <result property="averageDurationMinutes" column="average_duration_minutes"/>
+        <result property="estimatedRevenue" column="estimated_revenue"/>
+    </resultMap>
+
+</mapper>

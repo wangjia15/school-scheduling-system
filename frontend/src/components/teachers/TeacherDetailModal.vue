@@ -1,14 +1,18 @@
 <template>
-  <div class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full flex items-center justify-center z-50">
-    <div class="bg-white rounded-lg shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
-      <div class="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
-        <h3 class="text-lg font-medium text-gray-900">Teacher Details</h3>
-        <Button variant="ghost" @click="$emit('close')">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </Button>
-      </div>
+  <div v-if="open" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+    <Card class="w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+      <CardHeader>
+        <div class="flex items-center justify-between">
+          <CardTitle>Teacher Details</CardTitle>
+          <Button variant="ghost" size="icon" @click="$emit('update:open', false)">
+            <X class="h-4 w-4" />
+          </Button>
+        </div>
+        <CardDescription>
+          Detailed information about the teacher
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
 
       <div v-if="teacher" class="px-6 py-4 space-y-6">
         <!-- Header Information -->
@@ -133,44 +137,46 @@
         </Card>
 
         <!-- Actions -->
-        <div class="flex justify-end gap-3 pt-4 border-t">
-          <Button variant="outline" @click="$emit('manage-availability', teacher)">
-            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-            </svg>
-            Manage Availability
+        <div class="flex items-center justify-end gap-3 pt-4 border-t">
+          <Button variant="outline" @click="$emit('close')">
+            Close
           </Button>
           <Button @click="$emit('edit', teacher)">
-            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-            </svg>
+            <Pencil class="h-4 w-4 mr-2" />
             Edit Teacher
           </Button>
         </div>
       </div>
-    </div>
+      </CardContent>
+    </Card>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import Card, { CardHeader, CardTitle, CardContent } from '@/components/ui/Card.vue'
+import Card from '@/components/ui/Card.vue'
+import CardHeader from '@/components/ui/CardHeader.vue'
+import CardTitle from '@/components/ui/CardTitle.vue'
+import CardDescription from '@/components/ui/CardDescription.vue'
+import CardContent from '@/components/ui/CardContent.vue'
 import Button from '@/components/ui/Button.vue'
 import Badge from '@/components/ui/Badge.vue'
-import teacherService, { type Teacher } from '@/services/teacherService'
+import { X, Pencil } from 'lucide-vue-next'
+import { type Teacher } from '@/services/teacherService'
 
 interface Props {
+  open: boolean
   teacher?: Teacher | null
 }
 
 interface Emits {
-  (e: 'close'): void
-  (e: 'edit', teacher: Teacher): void
-  (e: 'manage-availability', teacher: Teacher): void
+  'update:open': [value: boolean]
+  'edit': [teacher: Teacher]: void
+  'close': []
 }
 
-defineProps<Props>()
-defineEmits<Emits>()
+const props = defineProps<Props>()
+const emit = defineEmits<Emits>()
 
 const getProficiencyBadgeVariant = (level: string) => {
   switch (level) {

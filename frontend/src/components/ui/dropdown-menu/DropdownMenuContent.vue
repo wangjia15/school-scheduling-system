@@ -1,0 +1,1 @@
+<template>\n  <div class=\"py-1\">\n    <slot />\n  </div>\n</template>
