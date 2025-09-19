@@ -4,7 +4,7 @@ status: backlog
 created: 2025-09-19T07:30:27Z
 progress: 0%
 prd: .claude/prds/school-scheduling-system.md
-github: [Will be updated when synced to GitHub]
+github: https://github.com/wangjia15/school-scheduling-system/issues/1
 ---
 
 # Epic: School Scheduling System
