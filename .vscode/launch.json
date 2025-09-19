@@ -1,0 +1,57 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "java",
+      "name": "Debug Spring Boot",
+      "request": "launch",
+      "mainClass": "com.school.scheduling.SchedulingSystemApplication",
+      "projectName": "scheduling-system",
+      "args": "",
+      "vmArgs": "-Dspring.profiles.active=dev",
+      "cwd": "${workspaceFolder}/backend",
+      "console": "internalConsole",
+      "stopOnEntry": false,
+      "env": {
+        "SPRING_PROFILES_ACTIVE": "dev"
+      }
+    },
+    {
+      "type": "node",
+      "name": "Debug Vue Frontend",
+      "request": "launch",
+      "program": "${workspaceFolder}/frontend/node_modules/vite/bin/vite.js",
+      "args": ["--mode", "development"],
+      "cwd": "${workspaceFolder}/frontend",
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "neverOpen",
+      "env": {
+        "NODE_ENV": "development"
+      }
+    },
+    {
+      "type": "node",
+      "name": "Debug Vue Tests",
+      "request": "launch",
+      "program": "${workspaceFolder}/frontend/node_modules/vitest/vitest.mjs",
+      "args": ["run", "--mode", "test"],
+      "cwd": "${workspaceFolder}/frontend",
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "neverOpen"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Debug Full Stack",
+      "configurations": [
+        "Debug Spring Boot",
+        "Debug Vue Frontend"
+      ],
+      "stopAll": true,
+      "presentation": {
+        "hidden": false,
+        "order": 1
+      }
+    }
+  ]
+}
