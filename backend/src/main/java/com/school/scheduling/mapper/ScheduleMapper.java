@@ -305,6 +305,17 @@ public interface ScheduleMapper {
             "</script>")
     int batchUpdate(@Param("schedules") List<Schedule> schedules);
 
+    // Export support methods
+    @Select("<script>" +
+            "SELECT * FROM schedules WHERE id IN " +
+            "<foreach collection='ids' item='id' open='(' separator=',' close=')'>" +
+            "#{id}" +
+            "</foreach>" +
+            "AND deleted_at IS NULL" +
+            "</script>")
+    @ResultMap("scheduleResultMap")
+    List<Schedule> findByIds(@Param("ids") List<Long> ids);
+
     // Result classes for complex queries
     interface ScheduleStatistics {
         Integer getTotalSchedules();

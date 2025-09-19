@@ -321,6 +321,17 @@ public interface ClassroomMapper {
             "</script>")
     int batchUpdate(@Param("classrooms") List<Classroom> classrooms);
 
+    // Export support methods
+    @Select("<script>" +
+            "SELECT * FROM classrooms WHERE id IN " +
+            "<foreach collection='ids' item='id' open='(' separator=',' close=')'>" +
+            "#{id}" +
+            "</foreach>" +
+            "AND deleted_at IS NULL" +
+            "</script>")
+    @ResultMap("classroomResultMap")
+    List<Classroom> findByIds(@Param("ids") List<Long> ids);
+
     // Result classes for complex queries
     interface BuildingCapacityStats {
         String getBuildingCode();

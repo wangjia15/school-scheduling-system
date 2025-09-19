@@ -223,6 +223,17 @@ public interface TeacherMapper {
             "</script>")
     int batchUpdate(@Param("teachers") List<Teacher> teachers);
 
+    // Export support methods
+    @Select("<script>" +
+            "SELECT * FROM teachers WHERE id IN " +
+            "<foreach collection='ids' item='id' open='(' separator=',' close=')'>" +
+            "#{id}" +
+            "</foreach>" +
+            "AND deleted_at IS NULL" +
+            "</script>")
+    @ResultMap("teacherResultMap")
+    List<Teacher> findByIds(@Param("ids") List<Long> ids);
+
     // Custom result class for statistics
     interface TeacherStatistics {
         BigDecimal getAvgHours();

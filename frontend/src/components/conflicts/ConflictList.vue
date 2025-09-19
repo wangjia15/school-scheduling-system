@@ -155,7 +155,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import Card from '@/components/ui/Card.vue'
 import CardHeader from '@/components/ui/CardHeader.vue'
 import CardTitle from '@/components/ui/CardTitle.vue'
@@ -165,6 +165,7 @@ import Button from '@/components/ui/Button.vue'
 import Input from '@/components/ui/Input.vue'
 import Select from '@/components/ui/Select.vue'
 import Badge from '@/components/ui/Badge.vue'
+import { useToast } from 'vue-toastification'
 import {
   Search,
   RefreshCw,
@@ -172,6 +173,7 @@ import {
   Eye,
   X
 } from 'lucide-vue-next'
+import { websocketService, type ConflictDetectedMessage, type ConflictStatsMessage } from '@/services/websocketService'
 
 interface Conflict {
   id: string
@@ -184,11 +186,14 @@ interface Conflict {
   resolution: string
 }
 
+const toast = useToast()
 const searchQuery = ref('')
 const severityFilter = ref('')
 const statusFilter = ref('')
 const selectedConflicts = ref<string[]>([])
 const selectedConflict = ref<Conflict | null>(null)
+const isLoading = ref(false)
+const realTimeUpdates = ref(true)
 
 const tableHeaders = [
   { key: 'select', label: '', width: '50px' },

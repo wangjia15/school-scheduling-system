@@ -597,8 +597,432 @@ public class ExportService {
         }
     }
 
-    // Additional report generation methods would be implemented here...
-    // (addTeacherWorkloadPdf, addClassroomUtilizationPdf, etc.)
+    // Template and formatting system
+
+    private void addTeacherWorkloadPdf(Document document, List<Teacher> teachers, List<Schedule> schedules, ExportRequest request) throws Exception {
+        Font headerFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 12, BaseColor.BLACK);
+        Font dataFont = FontFactory.getFont(FontFactory.HELVETICA, 10, BaseColor.BLACK);
+
+        // Create title
+        Paragraph title = new Paragraph("Teacher Workload Analysis", headerFont);
+        title.setAlignment(Element.ALIGN_CENTER);
+        document.add(title);
+        document.add(Chunk.NEWLINE);
+
+        // Create table
+        PdfPTable table = new PdfPTable(5);
+        table.setWidthPercentage(100);
+
+        // Add headers
+        table.addCell(createCell("Teacher", headerFont));
+        table.addCell(createCell("Department", headerFont));
+        table.addCell(createCell("Courses", headerFont));
+        table.addCell(createCell("Hours/Week", headerFont));
+        table.addCell(createCell("Utilization", headerFont));
+
+        // Calculate teacher workloads
+        Map<Long, TeacherWorkload> workloads = calculateTeacherWorkloads(teachers, schedules);
+
+        // Add data
+        for (Teacher teacher : teachers) {
+            TeacherWorkload workload = workloads.get(teacher.getId());
+            table.addCell(createCell(teacher.getFullName(), dataFont));
+            table.addCell(createCell(teacher.getDepartment().getName(), dataFont));
+            table.addCell(createCell(String.valueOf(workload != null ? workload.courseCount : 0), dataFont));
+            table.addCell(createCell(String.valueOf(workload != null ? workload.totalHours : 0), dataFont));
+            table.addCell(createCell(workload != null ? workload.utilizationPercentage + "%" : "0%", dataFont));
+        }
+
+        document.add(table);
+    }
+
+    private void addClassroomUtilizationPdf(Document document, List<Classroom> classrooms, List<Schedule> schedules, ExportRequest request) throws Exception {
+        Font headerFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 12, BaseColor.BLACK);
+        Font dataFont = FontFactory.getFont(FontFactory.HELVETICA, 10, BaseColor.BLACK);
+
+        // Create title
+        Paragraph title = new Paragraph("Classroom Utilization Report", headerFont);
+        title.setAlignment(Element.ALIGN_CENTER);
+        document.add(title);
+        document.add(Chunk.NEWLINE);
+
+        // Create table
+        PdfPTable table = new PdfPTable(6);
+        table.setWidthPercentage(100);
+
+        // Add headers
+        table.addCell(createCell("Classroom", headerFont));
+        table.addCell(createCell("Type", headerFont));
+        table.addCell(createCell("Capacity", headerFont));
+        table.addCell(createCell("Scheduled", headerFont));
+        table.addCell(createCell("Available", headerFont));
+        table.addCell(createCell("Utilization", headerFont));
+
+        // Calculate classroom utilization
+        Map<Long, ClassroomUtilization> utilization = calculateClassroomUtilization(classrooms, schedules);
+
+        // Add data
+        for (Classroom classroom : classrooms) {
+            ClassroomUtilization util = utilization.get(classroom.getId());
+            table.addCell(createCell(classroom.getRoomCode(), dataFont));
+            table.addCell(createCell(classroom.getRoomType(), dataFont));
+            table.addCell(createCell(String.valueOf(classroom.getCapacity()), dataFont));
+            table.addCell(createCell(String.valueOf(util != null ? util.scheduledHours : 0), dataFont));
+            table.addCell(createCell(String.valueOf(util != null ? util.availableHours : 0), dataFont));
+            table.addCell(createCell(util != null ? util.utilizationPercentage + "%" : "0%", dataFont));
+        }
+
+        document.add(table);
+    }
+
+    private void addConflictsReportPdf(Document document, List<Schedule> schedules, ExportRequest request) throws Exception {
+        Font headerFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 12, BaseColor.BLACK);
+        Font dataFont = FontFactory.getFont(FontFactory.HELVETICA, 10, BaseColor.BLACK);
+        Font conflictFont = FontFactory.getFont(FontFactory.HELVETICA, 10, BaseColor.RED);
+
+        // Create title
+        Paragraph title = new Paragraph("Schedule Conflicts Report", headerFont);
+        title.setAlignment(Element.ALIGN_CENTER);
+        document.add(title);
+        document.add(Chunk.NEWLINE);
+
+        // Find conflicts
+        List<ScheduleConflict> conflicts = findScheduleConflicts(schedules);
+
+        if (conflicts.isEmpty()) {
+            Paragraph noConflicts = new Paragraph("No schedule conflicts detected.", dataFont);
+            noConflicts.setAlignment(Element.ALIGN_CENTER);
+            document.add(noConflicts);
+            return;
+        }
+
+        // Create table
+        PdfPTable table = new PdfPTable(5);
+        table.setWidthPercentage(100);
+
+        // Add headers
+        table.addCell(createCell("Date", headerFont));
+        table.addCell(createCell("Time", headerFont));
+        table.addCell(createCell("Type", headerFont));
+        table.addCell(createCell("Classroom", headerFont));
+        table.addCell(createCell("Severity", headerFont));
+
+        // Add conflicts
+        for (ScheduleConflict conflict : conflicts) {
+            table.addCell(createCell(conflict.getDate().toString(), dataFont));
+            table.addCell(createCell(conflict.getTimeRange(), dataFont));
+            table.addCell(createCell(conflict.getType(), conflictFont));
+            table.addCell(createCell(conflict.getClassroom(), dataFont));
+            table.addCell(createCell(conflict.getSeverity(), conflictFont));
+        }
+
+        document.add(table);
+    }
+
+    private void createTeacherWorkloadSheet(XSSFWorkbook workbook, List<Teacher> teachers, List<Schedule> schedules, ExportRequest request) {
+        XSSFSheet sheet = workbook.createSheet("Teacher Workload");
+
+        // Create header row
+        Row headerRow = sheet.createRow(0);
+        String[] headers = {"Teacher ID", "Teacher Name", "Department", "Title", "Courses Assigned",
+                          "Weekly Hours", "Max Hours", "Utilization %", "Status"};
+
+        for (int i = 0; i < headers.length; i++) {
+            Cell cell = headerRow.createCell(i);
+            cell.setCellValue(headers[i]);
+            cell.setCellStyle(createHeaderStyle(workbook));
+        }
+
+        // Calculate workloads
+        Map<Long, TeacherWorkload> workloads = calculateTeacherWorkloads(teachers, schedules);
+
+        // Add data
+        int rowNum = 1;
+        for (Teacher teacher : teachers) {
+            Row row = sheet.createRow(rowNum++);
+            TeacherWorkload workload = workloads.get(teacher.getId());
+
+            row.createCell(0).setCellValue(teacher.getId());
+            row.createCell(1).setCellValue(teacher.getFullName());
+            row.createCell(2).setCellValue(teacher.getDepartment().getName());
+            row.createCell(3).setCellValue(teacher.getTitle().toString());
+            row.createCell(4).setCellValue(workload != null ? workload.courseCount : 0);
+            row.createCell(5).setCellValue(workload != null ? workload.totalHours : 0);
+            row.createCell(6).setCellValue(teacher.getMaxWeeklyHours().doubleValue());
+
+            double utilization = 0;
+            if (workload != null && teacher.getMaxWeeklyHours() != null) {
+                utilization = (workload.totalHours / teacher.getMaxWeeklyHours().doubleValue()) * 100;
+            }
+            row.createCell(7).setCellValue(utilization);
+
+            String status = "Normal";
+            if (utilization > 100) {
+                status = "Overloaded";
+            } else if (utilization < 50) {
+                status = "Underutilized";
+            }
+            row.createCell(8).setCellValue(status);
+        }
+
+        // Auto-size columns
+        for (int i = 0; i < headers.length; i++) {
+            sheet.autoSizeColumn(i);
+        }
+
+        // Add conditional formatting
+        addConditionalFormatting(sheet, 7, 8); // Utilization column
+    }
+
+    private void createClassroomUtilizationSheet(XSSFWorkbook workbook, List<Classroom> classrooms, List<Schedule> schedules, ExportRequest request) {
+        XSSFSheet sheet = workbook.createSheet("Classroom Utilization");
+
+        // Create header row
+        Row headerRow = sheet.createRow(0);
+        String[] headers = {"Room Code", "Building", "Room Type", "Capacity", "Scheduled Hours",
+                          "Available Hours", "Utilization %", "Equipment", "Status"};
+
+        for (int i = 0; i < headers.length; i++) {
+            Cell cell = headerRow.createCell(i);
+            cell.setCellValue(headers[i]);
+            cell.setCellStyle(createHeaderStyle(workbook));
+        }
+
+        // Calculate utilization
+        Map<Long, ClassroomUtilization> utilization = calculateClassroomUtilization(classrooms, schedules);
+
+        // Add data
+        int rowNum = 1;
+        for (Classroom classroom : classrooms) {
+            Row row = sheet.createRow(rowNum++);
+            ClassroomUtilization util = utilization.get(classroom.getId());
+
+            row.createCell(0).setCellValue(classroom.getRoomCode());
+            row.createCell(1).setCellValue(classroom.getBuildingCode());
+            row.createCell(2).setCellValue(classroom.getRoomType());
+            row.createCell(3).setCellValue(classroom.getCapacity());
+            row.createCell(4).setCellValue(util != null ? util.scheduledHours : 0);
+            row.createCell(5).setCellValue(util != null ? util.availableHours : 40); // Assume 40 hours available
+
+            double utilizationPercent = 0;
+            if (util != null && util.availableHours > 0) {
+                utilizationPercent = (util.scheduledHours / util.availableHours) * 100;
+            }
+            row.createCell(6).setCellValue(utilizationPercent);
+
+            row.createCell(7).setCellValue(String.join(", ", classroom.getEquipmentList()));
+
+            String status = "Available";
+            if (utilizationPercent > 90) {
+                status = "High Demand";
+            } else if (utilizationPercent > 75) {
+                status = "Well Utilized";
+            } else if (utilizationPercent < 25) {
+                status = "Underutilized";
+            }
+            row.createCell(8).setCellValue(status);
+        }
+
+        // Auto-size columns
+        for (int i = 0; i < headers.length; i++) {
+            sheet.autoSizeColumn(i);
+        }
+
+        // Add conditional formatting
+        addConditionalFormatting(sheet, 6, 9); // Utilization column
+    }
+
+    private void createConflictsReportSheet(XSSFWorkbook workbook, List<Schedule> schedules, ExportRequest request) {
+        XSSFSheet sheet = workbook.createSheet("Schedule Conflicts");
+
+        // Create header row
+        Row headerRow = sheet.createRow(0);
+        String[] headers = {"Date", "Time", "Conflict Type", "Classroom", "Teacher", "Course", "Severity", "Status"};
+
+        for (int i = 0; i < headers.length; i++) {
+            Cell cell = headerRow.createCell(i);
+            cell.setCellValue(headers[i]);
+            cell.setCellStyle(createHeaderStyle(workbook));
+        }
+
+        // Find conflicts
+        List<ScheduleConflict> conflicts = findScheduleConflicts(schedules);
+
+        // Add conflicts
+        int rowNum = 1;
+        for (ScheduleConflict conflict : conflicts) {
+            Row row = sheet.createRow(rowNum++);
+            row.createCell(0).setCellValue(conflict.getDate().toString());
+            row.createCell(1).setCellValue(conflict.getTimeRange());
+            row.createCell(2).setCellValue(conflict.getType());
+            row.createCell(3).setCellValue(conflict.getClassroom());
+            row.createCell(4).setCellValue(conflict.getTeacher());
+            row.createCell(5).setCellValue(conflict.getCourse());
+            row.createCell(6).setCellValue(conflict.getSeverity());
+            row.createCell(7).setCellValue(conflict.getStatus());
+        }
+
+        // Auto-size columns
+        for (int i = 0; i < headers.length; i++) {
+            sheet.autoSizeColumn(i);
+        }
+    }
+
+    // Helper methods for calculations
+
+    private Map<Long, TeacherWorkload> calculateTeacherWorkloads(List<Teacher> teachers, List<Schedule> schedules) {
+        Map<Long, TeacherWorkload> workloads = new HashMap<>();
+
+        // Initialize
+        for (Teacher teacher : teachers) {
+            TeacherWorkload workload = new TeacherWorkload();
+            workload.teacherId = teacher.getId();
+            workload.courseCount = 0;
+            workload.totalHours = 0;
+            workloads.put(teacher.getId(), workload);
+        }
+
+        // Calculate from schedules
+        for (Schedule schedule : schedules) {
+            Long teacherId = schedule.getCourseOffering().getTeacher().getId();
+            TeacherWorkload workload = workloads.get(teacherId);
+            if (workload != null) {
+                workload.courseCount++;
+                workload.totalHours += schedule.getTimeSlot().getDurationHours();
+            }
+        }
+
+        // Calculate utilization percentages
+        for (Teacher teacher : teachers) {
+            TeacherWorkload workload = workloads.get(teacher.getId());
+            if (workload != null && teacher.getMaxWeeklyHours() != null) {
+                workload.utilizationPercentage = (int) ((workload.totalHours / teacher.getMaxWeeklyHours().doubleValue()) * 100);
+            }
+        }
+
+        return workloads;
+    }
+
+    private Map<Long, ClassroomUtilization> calculateClassroomUtilization(List<Classroom> classrooms, List<Schedule> schedules) {
+        Map<Long, ClassroomUtilization> utilization = new HashMap<>();
+
+        // Initialize
+        for (Classroom classroom : classrooms) {
+            ClassroomUtilization util = new ClassroomUtilization();
+            util.classroomId = classroom.getId();
+            util.scheduledHours = 0;
+            util.availableHours = 40; // Assume 40 hours per week
+            utilization.put(classroom.getId(), util);
+        }
+
+        // Calculate from schedules
+        for (Schedule schedule : schedules) {
+            Long classroomId = schedule.getClassroom().getId();
+            ClassroomUtilization util = utilization.get(classroomId);
+            if (util != null) {
+                util.scheduledHours += schedule.getTimeSlot().getDurationHours();
+            }
+        }
+
+        // Calculate utilization percentages
+        for (ClassroomUtilization util : utilization.values()) {
+            if (util.availableHours > 0) {
+                util.utilizationPercentage = (int) ((util.scheduledHours / util.availableHours) * 100);
+            }
+        }
+
+        return utilization;
+    }
+
+    private List<ScheduleConflict> findScheduleConflicts(List<Schedule> schedules) {
+        List<ScheduleConflict> conflicts = new ArrayList<>();
+
+        // Group by date and time slot
+        Map<String, List<Schedule>> scheduleMap = new HashMap<>();
+        for (Schedule schedule : schedules) {
+            String key = schedule.getScheduleDate() + "_" + schedule.getTimeSlotId();
+            scheduleMap.computeIfAbsent(key, k -> new ArrayList<>()).add(schedule);
+        }
+
+        // Find conflicts
+        for (List<Schedule> sameTimeSchedules : scheduleMap.values()) {
+            if (sameTimeSchedules.size() > 1) {
+                // Check classroom conflicts
+                Map<Long, List<Schedule>> classroomMap = new HashMap<>();
+                for (Schedule schedule : sameTimeSchedules) {
+                    classroomMap.computeIfAbsent(schedule.getClassroomId(), k -> new ArrayList<>()).add(schedule);
+                }
+
+                for (List<Schedule> classroomSchedules : classroomMap.values()) {
+                    if (classroomSchedules.size() > 1) {
+                        for (int i = 0; i < classroomSchedules.size() - 1; i++) {
+                            for (int j = i + 1; j < classroomSchedules.size(); j++) {
+                                ScheduleConflict conflict = new ScheduleConflict();
+                                conflict.setDate(classroomSchedules.get(i).getScheduleDate());
+                                conflict.setTimeRange(classroomSchedules.get(i).getTimeSlot().getTimeRange());
+                                conflict.setType("Classroom Double Booking");
+                                conflict.setClassroom(classroomSchedules.get(i).getClassroom().getRoomCode());
+                                conflict.setTeacher(classroomSchedules.get(i).getCourseOffering().getTeacher().getFullName());
+                                conflict.setCourse(classroomSchedules.get(i).getCourseOffering().getCourseCode());
+                                conflict.setSeverity("High");
+                                conflict.setStatus("Unresolved");
+                                conflicts.add(conflict);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return conflicts;
+    }
+
+    private void addConditionalFormatting(XSSFSheet sheet, int columnIndex, int rowCount) {
+        // This is a simplified version - in a real implementation, you would add proper conditional formatting
+        // For now, we'll just set some basic formatting
+        XSSFSheetConditionalFormatting sheetCF = sheet.getSheetConditionalFormatting();
+
+        // Create conditional formatting rules
+        // Note: This is a placeholder for actual conditional formatting implementation
+        // In a real implementation, you would create specific formatting rules
+    }
+
+    // Helper classes for calculations
+
+    private static class TeacherWorkload {
+        Long teacherId;
+        int courseCount;
+        double totalHours;
+        int utilizationPercentage;
+    }
+
+    private static class ClassroomUtilization {
+        Long classroomId;
+        int scheduledHours;
+        int availableHours;
+        int utilizationPercentage;
+    }
+
+    private static class ScheduleConflict {
+        LocalDate date;
+        String timeRange;
+        String type;
+        String classroom;
+        String teacher;
+        String course;
+        String severity;
+        String status;
+
+        // Getters
+        public LocalDate getDate() { return date; }
+        public String getTimeRange() { return timeRange; }
+        public String getType() { return type; }
+        public String getClassroom() { return classroom; }
+        public String getTeacher() { return teacher; }
+        public String getCourse() { return course; }
+        public String getSeverity() { return severity; }
+        public String getStatus() { return status; }
+    }
 
     // Export job tracking
     public static class ExportJob {
