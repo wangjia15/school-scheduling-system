@@ -1,0 +1,5 @@
+#!/bin/sh
+
+# Maven wrapper script for Windows
+MAVEN_OPTS="$MAVEN_OPTS -Djava.security.egd=file:/dev/./urandom -Dfile.encoding=UTF-8"
+exec java $MAVEN_OPTS -jar "$0/../.mvn/wrapper/maven-wrapper.jar" "$@"
