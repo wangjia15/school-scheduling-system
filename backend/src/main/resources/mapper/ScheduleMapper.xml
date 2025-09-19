@@ -1,0 +1,481 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+    "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.school.scheduling.mapper.ScheduleMapper">
+
+    <!-- Result Maps -->
+    <resultMap id="scheduleWithFullDetailsResultMap" type="com.school.scheduling.domain.Schedule">
+        <id property="id" column="id"/>
+        <result property="courseOfferingId" column="course_offering_id"/>
+        <result property="classroomId" column="classroom_id"/>
+        <result property="timeSlotId" column="time_slot_id"/>
+        <result property="scheduleDate" column="schedule_date"/>
+        <result property="isRecurring" column="is_recurring"/>
+        <result property="recurrencePattern" column="recurrence_pattern"/>
+        <result property="notes" column="notes"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+        <result property="deletedAt" column="deleted_at"/>
+
+        <!-- Association with Course Offering -->
+        <association property="courseOffering" javaType="com.school.scheduling.domain.CourseOffering">
+            <id property="id" column="offering_id"/>
+            <result property="courseId" column="course_id"/>
+            <result property="semesterId" column="semester_id"/>
+            <result property="sectionNumber" column="section_number"/>
+            <result property="teacherId" column="teacher_id"/>
+            <result property="maxEnrollment" column="max_enrollment"/>
+            <result property="currentEnrollment" column="current_enrollment"/>
+            <result property="scheduleType" column="schedule_type"/>
+            <result property="isOpen" column="is_open"/>
+            <result property="syllabusUrl" column="syllabus_url"/>
+        </association>
+
+        <!-- Association with Classroom -->
+        <association property="classroom" javaType="com.school.scheduling.domain.Classroom">
+            <id property="id" column="classroom_id"/>
+            <result property="buildingCode" column="building_code"/>
+            <result property="roomNumber" column="room_number"/>
+            <result property="name" column="room_name"/>
+            <result property="capacity" column="room_capacity"/>
+            <result property="roomType" column="room_type"/>
+            <result property="hasProjector" column="has_projector"/>
+            <result property="hasComputer" column="has_computer"/>
+            <result property="hasWhiteboard" column="has_whiteboard"/>
+        </association>
+
+        <!-- Association with Time Slot -->
+        <association property="timeSlot" javaType="com.school.scheduling.domain.TimeSlot">
+            <id property="id" column="time_slot_id"/>
+            <result property="dayOfWeek" column="day_of_week"/>
+            <result property="startTime" column="start_time"/>
+            <result property="endTime" column="end_time"/>
+            <result property="slotType" column="slot_type"/>
+        </association>
+
+        <!-- Nested associations for Course -->
+        <association property="courseOffering.course" javaType="com.school.scheduling.domain.Course">
+            <id property="id" column="course_id"/>
+            <result property="courseCode" column="course_code"/>
+            <result property="title" column="course_title"/>
+            <result property="credits" column="credits"/>
+            <result property="level" column="course_level"/>
+        </association>
+
+        <!-- Nested associations for Teacher -->
+        <association property="courseOffering.teacher.user" javaType="com.school.scheduling.domain.User">
+            <id property="id" column="teacher_user_id"/>
+            <result property="firstName" column="teacher_first_name"/>
+            <result property="lastName" column="teacher_last_name"/>
+            <result property="email" column="teacher_email"/>
+        </association>
+    </resultMap>
+
+    <!-- Base Columns -->
+    <sql id="scheduleColumns">
+        s.id, s.course_offering_id, s.classroom_id, s.time_slot_id, s.schedule_date,
+        s.is_recurring, s.recurrence_pattern, s.notes, s.created_at, s.updated_at, s.deleted_at
+    </sql>
+
+    <sql id="scheduleWithBasicDetailsColumns">
+        s.id, s.course_offering_id, s.classroom_id, s.time_slot_id, s.schedule_date,
+        s.is_recurring, s.recurrence_pattern, s.notes, s.created_at, s.updated_at, s.deleted_at,
+        co.id as offering_id, co.course_id, co.semester_id, co.section_number,
+        co.teacher_id, co.max_enrollment, co.current_enrollment, co.schedule_type,
+        co.is_open, co.syllabus_url,
+        cr.building_code, cr.room_number, cr.name as room_name, cr.capacity as room_capacity,
+        cr.room_type, cr.has_projector, cr.has_computer, cr.has_whiteboard,
+        ts.day_of_week, ts.start_time, ts.end_time, ts.slot_type,
+        c.course_code, c.title as course_title, c.credits, c.level as course_level,
+        u.id as teacher_user_id, u.first_name as teacher_first_name,
+        u.last_name as teacher_last_name, u.email as teacher_email
+    </sql>
+
+    <!-- Complex Scheduling Queries -->
+    <select id="findSchedulesWithFullDetails" resultMap="scheduleWithFullDetailsResultMap">
+        SELECT
+            <include refid="scheduleWithBasicDetailsColumns"/>
+        FROM schedules s
+        JOIN course_offerings co ON s.course_offering_id = co.id
+        JOIN classrooms cr ON s.classroom_id = cr.id
+        JOIN time_slots ts ON s.time_slot_id = ts.id
+        JOIN courses c ON co.course_id = c.id
+        JOIN teachers t ON co.teacher_id = t.id
+        JOIN users u ON t.user_id = u.id
+        WHERE s.deleted_at IS NULL
+        AND co.deleted_at IS NULL
+        AND cr.deleted_at IS NULL
+        <if test="startDate != null">
+            AND s.schedule_date >= #{startDate}
+        </if>
+        <if test="endDate != null">
+            AND s.schedule_date <= #{endDate}
+        </if>
+        <if test="departmentId != null">
+            AND c.department_id = #{departmentId}
+        </if>
+        <if test="buildingCode != null">
+            AND cr.building_code = #{buildingCode}
+        </if>
+        <if test="teacherId != null">
+            AND co.teacher_id = #{teacherId}
+        </if>
+        ORDER BY s.schedule_date, ts.start_time
+    </select>
+
+    <!-- Advanced Conflict Detection -->
+    <select id="findAllConflictsDetailed" resultType="java.util.Map">
+        SELECT
+            'CLASSROOM' as conflict_type,
+            s1.id as schedule1_id,
+            s2.id as schedule2_id,
+            s1.schedule_date as conflict_date,
+            cr.building_code,
+            cr.room_number,
+            ts.day_of_week,
+            ts.start_time,
+            ts.end_time,
+            CONCAT(c1.course_code, ' Section ', co1.section_number) as course1,
+            CONCAT(c2.course_code, ' Section ', co2.section_number) as course2,
+            CONCAT(u1.first_name, ' ', u1.last_name) as teacher1,
+            CONCAT(u2.first_name, ' ', u2.last_name) as teacher2
+        FROM schedules s1
+        JOIN schedules s2 ON s1.classroom_id = s2.classroom_id
+        JOIN course_offerings co1 ON s1.course_offering_id = co1.id
+        JOIN course_offerings co2 ON s2.course_offering_id = co2.id
+        JOIN courses c1 ON co1.course_id = c1.id
+        JOIN courses c2 ON co2.course_id = c2.id
+        JOIN teachers t1 ON co1.teacher_id = t1.id
+        JOIN teachers t2 ON co2.teacher_id = t2.id
+        JOIN users u1 ON t1.user_id = u1.id
+        JOIN users u2 ON t2.user_id = u2.id
+        JOIN classrooms cr ON s1.classroom_id = cr.id
+        JOIN time_slots ts ON s1.time_slot_id = ts.id
+        WHERE s1.id != s2.id
+        AND s1.schedule_date = s2.schedule_date
+        AND s1.time_slot_id = s2.time_slot_id
+        AND s1.deleted_at IS NULL
+        AND s2.deleted_at IS NULL
+        AND s1.schedule_date BETWEEN #{startDate} AND #{endDate}
+
+        UNION ALL
+
+        SELECT
+            'TEACHER' as conflict_type,
+            s1.id as schedule1_id,
+            s2.id as schedule2_id,
+            s1.schedule_date as conflict_date,
+            cr1.building_code,
+            cr1.room_number,
+            ts.day_of_week,
+            ts.start_time,
+            ts.end_time,
+            CONCAT(c1.course_code, ' Section ', co1.section_number) as course1,
+            CONCAT(c2.course_code, ' Section ', co2.section_number) as course2,
+            CONCAT(u.first_name, ' ', u.last_name) as teacher1,
+            CONCAT(u.first_name, ' ', u.last_name) as teacher2
+        FROM schedules s1
+        JOIN schedules s2 ON s1.course_offering_id != s2.course_offering_id
+        JOIN course_offerings co1 ON s1.course_offering_id = co1.id
+        JOIN course_offerings co2 ON s2.course_offering_id = co2.id
+        JOIN courses c1 ON co1.course_id = c1.id
+        JOIN courses c2 ON co2.course_id = c2.id
+        JOIN teachers t ON co1.teacher_id = t.id AND co2.teacher_id = t.id
+        JOIN users u ON t.user_id = u.id
+        JOIN classrooms cr1 ON s1.classroom_id = cr1.id
+        JOIN classrooms cr2 ON s2.classroom_id = cr2.id
+        JOIN time_slots ts ON s1.time_slot_id = ts.id AND s2.time_slot_id = ts.id
+        WHERE s1.schedule_date = s2.schedule_date
+        AND s1.deleted_at IS NULL
+        AND s2.deleted_at IS NULL
+        AND s1.schedule_date BETWEEN #{startDate} AND #{endDate}
+        ORDER BY conflict_date, start_time, conflict_type
+    </select>
+
+    <!-- Schedule Optimization Analysis -->
+    <select id="getScheduleOptimizationInsights" resultType="java.util.Map">
+        WITH room_utilization AS (
+            SELECT
+                cr.id as classroom_id,
+                cr.building_code,
+                cr.room_number,
+                cr.capacity,
+                COUNT(s.id) as scheduled_hours,
+                COUNT(DISTINCT s.schedule_date) as days_used,
+                ROUND((COUNT(s.id) * 100.0 / (SELECT COUNT(*) FROM time_slots WHERE is_active = true)), 2) as utilization_rate
+            FROM classrooms cr
+            LEFT JOIN schedules s ON cr.id = s.classroom_id AND s.deleted_at IS NULL
+            WHERE cr.deleted_at IS NULL
+            AND s.schedule_date BETWEEN #{startDate} AND #{endDate}
+            GROUP BY cr.id, cr.building_code, cr.room_number, cr.capacity
+        ),
+        teacher_workload AS (
+            SELECT
+                t.id as teacher_id,
+                CONCAT(u.first_name, ' ', u.last_name) as teacher_name,
+                COUNT(s.id) as scheduled_hours,
+                COUNT(DISTINCT co.id) as courses_teaching,
+                SUM(c.contact_hours_per_week) as total_contact_hours
+            FROM teachers t
+            JOIN users u ON t.user_id = u.id
+            JOIN course_offerings co ON t.id = co.teacher_id
+            JOIN schedules s ON co.id = s.course_offering_id
+            JOIN courses c ON co.course_id = c.id
+            WHERE t.deleted_at IS NULL
+            AND s.deleted_at IS NULL
+            AND co.deleted_at IS NULL
+            AND s.schedule_date BETWEEN #{startDate} AND #{endDate}
+            GROUP BY t.id, u.first_name, u.last_name
+        )
+        SELECT 'ROOM_UTILIZATION' as insight_type,
+               building_code as category,
+               room_number as subcategory,
+               scheduled_hours as value1,
+               utilization_rate as value2
+        FROM room_utilization
+        WHERE utilization_rate > 80 OR utilization_rate < 20
+
+        UNION ALL
+
+        SELECT 'TEACHER_WORKLOAD' as insight_type,
+               teacher_name as category,
+               courses_teaching as subcategory,
+               scheduled_hours as value1,
+               total_contact_hours as value2
+        FROM teacher_workload
+        WHERE scheduled_hours > (SELECT AVG(scheduled_hours) * 1.2 FROM teacher_workload)
+           OR scheduled_hours < (SELECT AVG(scheduled_hours) * 0.8 FROM teacher_workload)
+        ORDER BY insight_type, value1 DESC
+    </select>
+
+    <!-- Recurring Schedule Generation -->
+    <select id="generateRecurringSchedules" resultType="java.util.Map">
+        WITH base_schedule AS (
+            SELECT * FROM schedules
+            WHERE id = #{baseScheduleId} AND deleted_at IS NULL
+        )
+        SELECT
+            #{baseScheduleId} as base_schedule_id,
+            DATE_ADD(base_schedule.schedule_date, INTERVAL n DAY) as generated_date,
+            base_schedule.course_offering_id,
+            base_schedule.classroom_id,
+            base_schedule.time_slot_id,
+            base_schedule.is_recurring,
+            base_schedule.recurrence_pattern,
+            CONCAT('Generated from schedule #', #{baseScheduleId}) as notes
+        FROM base_schedule
+        JOIN (
+            SELECT 0 as n UNION SELECT 1 UNION SELECT 2 UNION SELECT 3 UNION SELECT 4
+            UNION SELECT 5 UNION SELECT 6 UNION SELECT 7 UNION SELECT 8 UNION SELECT 9
+            UNION SELECT 10 UNION SELECT 11 UNION SELECT 12 UNION SELECT 13
+        ) as numbers
+        WHERE DATE_ADD(base_schedule.schedule_date, INTERVAL n DAY) &lt;= #{endDate}
+        AND DAYOFWEEK(DATE_ADD(base_schedule.schedule_date, INTERVAL n DAY)) =
+            DAYOFWEEK(base_schedule.schedule_date)
+        AND DATE_ADD(base_schedule.schedule_date, INTERVAL n DAY) != base_schedule.schedule_date
+        AND NOT EXISTS (
+            SELECT 1 FROM schedules s
+            WHERE s.course_offering_id = base_schedule.course_offering_id
+            AND s.classroom_id = base_schedule.classroom_id
+            AND s.time_slot_id = base_schedule.time_slot_id
+            AND s.schedule_date = DATE_ADD(base_schedule.schedule_date, INTERVAL n DAY)
+            AND s.deleted_at IS NULL
+        )
+        ORDER BY generated_date
+    </select>
+
+    <!-- Schedule Conflict Validation Before Insert -->
+    <select id="validateScheduleBeforeInsert" resultType="java.util.Map">
+        SELECT
+            'CLASSROOM_CONFLICT' as conflict_type,
+            COUNT(*) as conflict_count
+        FROM schedules s
+        WHERE s.classroom_id = #{classroomId}
+        AND s.time_slot_id = #{timeSlotId}
+        AND s.schedule_date = #{scheduleDate}
+        AND s.deleted_at IS NULL
+
+        UNION ALL
+
+        SELECT
+            'TEACHER_CONFLICT' as conflict_type,
+            COUNT(*) as conflict_count
+        FROM schedules s
+        JOIN course_offerings co ON s.course_offering_id = co.id
+        WHERE co.teacher_id = #{teacherId}
+        AND s.time_slot_id = #{timeSlotId}
+        AND s.schedule_date = #{scheduleDate}
+        AND s.deleted_at IS NULL
+        AND co.deleted_at IS NULL
+
+        UNION ALL
+
+        SELECT
+            'CAPACITY_CONFLICT' as conflict_type,
+            CASE
+                WHEN cr.capacity &lt; co.current_enrollment THEN 1
+                ELSE 0
+            END as conflict_count
+        FROM classrooms cr
+        JOIN course_offerings co ON co.id = #{courseOfferingId}
+        WHERE cr.id = #{classroomId}
+        AND co.deleted_at IS NULL
+        AND cr.deleted_at IS NULL
+
+        UNION ALL
+
+        SELECT
+            'PREREQUISITE_CONFLICT' as conflict_type,
+            COUNT(*) as conflict_count
+        FROM course_prerequisites cp
+        WHERE cp.course_id = (SELECT course_id FROM course_offerings WHERE id = #{courseOfferingId})
+        AND cp.is_mandatory = true
+        AND cp.deleted_at IS NULL
+    </select>
+
+    <!-- Advanced Schedule Search with Full-Text -->
+    <select id="searchSchedulesAdvanced" resultMap="scheduleWithFullDetailsResultMap">
+        SELECT
+            <include refid="scheduleWithBasicDetailsColumns"/>
+        FROM schedules s
+        JOIN course_offerings co ON s.course_offering_id = co.id
+        JOIN classrooms cr ON s.classroom_id = cr.id
+        JOIN time_slots ts ON s.time_slot_id = ts.id
+        JOIN courses c ON co.course_id = c.id
+        JOIN teachers t ON co.teacher_id = t.id
+        JOIN users u ON t.user_id = u.id
+        LEFT JOIN departments d ON c.department_id = d.id
+        WHERE s.deleted_at IS NULL
+        AND co.deleted_at IS NULL
+        <if test="criteria.searchText != null and criteria.searchText != ''">
+            AND (
+                c.course_code LIKE CONCAT('%', #{criteria.searchText}, '%')
+                OR c.title LIKE CONCAT('%', #{criteria.searchText}, '%')
+                OR cr.building_code LIKE CONCAT('%', #{criteria.searchText}, '%')
+                OR cr.room_number LIKE CONCAT('%', #{criteria.searchText}, '%')
+                OR u.first_name LIKE CONCAT('%', #{criteria.searchText}, '%')
+                OR u.last_name LIKE CONCAT('%', #{criteria.searchText}, '%')
+                OR s.notes LIKE CONCAT('%', #{criteria.searchText}, '%')
+                OR d.name LIKE CONCAT('%', #{criteria.searchText}, '%')
+            )
+        </if>
+        <if test="criteria.startDate != null">
+            AND s.schedule_date >= #{criteria.startDate}
+        </if>
+        <if test="criteria.endDate != null">
+            AND s.schedule_date <= #{criteria.endDate}
+        </if>
+        <if test="criteria.departmentId != null">
+            AND c.department_id = #{criteria.departmentId}
+        </if>
+        <if test="criteria.teacherId != null">
+            AND co.teacher_id = #{criteria.teacherId}
+        </if>
+        <if test="criteria.classroomId != null">
+            AND s.classroom_id = #{criteria.classroomId}
+        </if>
+        <if test="criteria.buildingCode != null">
+            AND cr.building_code = #{criteria.buildingCode}
+        </if>
+        <if test="criteria.dayOfWeek != null">
+            AND ts.day_of_week = #{criteria.dayOfWeek}
+        </if>
+        <if test="criteria.roomType != null">
+            AND cr.room_type = #{criteria.roomType}
+        </if>
+        <if test="criteria.courseLevel != null">
+            AND c.level = #{criteria.courseLevel}
+        </if>
+        <if test="criteria.minEnrollment != null">
+            AND co.current_enrollment >= #{criteria.minEnrollment}
+        </if>
+        <if test="criteria.isRecurring != null">
+            AND s.is_recurring = #{criteria.isRecurring}
+        </if>
+        ORDER BY
+        <choose>
+            <when test="criteria.sortBy == 'date'">
+                s.schedule_date, ts.start_time
+            </when>
+            <when test="criteria.sortBy == 'course'">
+                c.course_code, s.schedule_date, ts.start_time
+            </when>
+            <when test="criteria.sortBy == 'teacher'">
+                u.last_name, u.first_name, s.schedule_date, ts.start_time
+            </when>
+            <when test="criteria.sortBy == 'classroom'">
+                cr.building_code, cr.room_number, s.schedule_date, ts.start_time
+            </when>
+            <otherwise>
+                s.schedule_date, ts.start_time
+            </otherwise>
+        </choose>
+    </select>
+
+    <!-- Schedule Dashboard Analytics -->
+    <select id="getScheduleDashboardAnalytics" resultType="java.util.Map">
+        SELECT
+            'TOTAL_SCHEDULES' as metric,
+            COUNT(*) as value
+        FROM schedules
+        WHERE deleted_at IS NULL
+        AND schedule_date BETWEEN #{startDate} AND #{endDate}
+
+        UNION ALL
+
+        SELECT
+            'CLASSROOM_UTILIZATION' as metric,
+            ROUND((COUNT(DISTINCT CONCAT(classroom_id, schedule_date)) * 100.0 /
+                  ((SELECT COUNT(*) FROM classrooms WHERE deleted_at IS NULL) *
+                   DATEDIFF(#{endDate}, #{startDate} + 1))), 2) as value
+        FROM schedules
+        WHERE deleted_at IS NULL
+        AND schedule_date BETWEEN #{startDate} AND #{endDate}
+
+        UNION ALL
+
+        SELECT
+            'AVG_TEACHER_WORKLOAD' as metric,
+            ROUND(AVG(teacher_stats.hour_count), 2) as value
+        FROM (
+            SELECT t.id, COUNT(s.id) as hour_count
+            FROM teachers t
+            JOIN course_offerings co ON t.id = co.teacher_id
+            JOIN schedules s ON co.id = s.course_offering_id
+            WHERE t.deleted_at IS NULL
+            AND s.deleted_at IS NULL
+            AND co.deleted_at IS NULL
+            AND s.schedule_date BETWEEN #{startDate} AND #{endDate}
+            GROUP BY t.id
+        ) as teacher_stats
+
+        UNION ALL
+
+        SELECT
+            'CONFLICT_COUNT' as metric,
+            (
+                SELECT COUNT(*) FROM (
+                    SELECT s1.id FROM schedules s1
+                    JOIN schedules s2 ON s1.classroom_id = s2.classroom_id
+                    WHERE s1.id != s2.id
+                    AND s1.schedule_date = s2.schedule_date
+                    AND s1.time_slot_id = s2.time_slot_id
+                    AND s1.deleted_at IS NULL AND s2.deleted_at IS NULL
+                    AND s1.schedule_date BETWEEN #{startDate} AND #{endDate}
+                    LIMIT 1000
+                ) as conflicts
+            ) as value
+
+        UNION ALL
+
+        SELECT
+            'RECURRING_SCHEDULES' as metric,
+            COUNT(*) as value
+        FROM schedules
+        WHERE is_recurring = true
+        AND deleted_at IS NULL
+        AND schedule_date BETWEEN #{startDate} AND #{endDate}
+    </select>
+
+</mapper>

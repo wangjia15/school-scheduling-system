@@ -1,0 +1,383 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+    "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.school.scheduling.mapper.ConflictMapper">
+
+    <!-- Result Maps -->
+    <resultMap id="conflictWithScheduleDetailsResultMap" type="com.school.scheduling.domain.ScheduleConflict">
+        <id property="id" column="id"/>
+        <result property="conflictType" column="conflict_type"/>
+        <result property="severity" column="severity"/>
+        <result property="description" column="description"/>
+        <result property="scheduleId1" column="schedule_id_1"/>
+        <result property="scheduleId2" column="schedule_id_2"/>
+        <result property="entityId" column="entity_id"/>
+        <result property="entityType" column="entity_type"/>
+        <result property="detectedAt" column="detected_at"/>
+        <result property="resolvedAt" column="resolved_at"/>
+        <result property="resolutionStatus" column="resolution_status"/>
+        <result property="resolutionNotes" column="resolution_notes"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+        <result property="deletedAt" column="deleted_at"/>
+
+        <!-- Schedule 1 Association -->
+        <association property="schedule1" javaType="com.school.scheduling.domain.Schedule">
+            <id property="id" column="schedule1_id"/>
+            <result property="scheduleDate" column="schedule1_date"/>
+            <result property="isRecurring" column="schedule1_recurring"/>
+            <result property="notes" column="schedule1_notes"/>
+        </association>
+
+        <!-- Schedule 2 Association -->
+        <association property="schedule2" javaType="com.school.scheduling.domain.Schedule">
+            <id property="id" column="schedule2_id"/>
+            <result property="scheduleDate" column="schedule2_date"/>
+            <result property="isRecurring" column="schedule2_recurring"/>
+            <result property="notes" column="schedule2_notes"/>
+        </association>
+
+        <!-- Entity Association (dynamic) -->
+        <association property="entity" javaType="java.lang.Object">
+            <id property="id" column="entity_id"/>
+        </association>
+    </resultMap>
+
+    <!-- Base Columns -->
+    <sql id="conflictColumns">
+        sc.id, sc.conflict_type, sc.severity, sc.description,
+        sc.schedule_id_1, sc.schedule_id_2, sc.entity_id, sc.entity_type,
+        sc.detected_at, sc.resolved_at, sc.resolution_status, sc.resolution_notes,
+        sc.created_at, sc.updated_at, sc.deleted_at
+    </sql>
+
+    <!-- Advanced Conflict Detection Query -->
+    <select id="detectAndCreateConflicts" resultType="java.util.Map">
+        -- Detect classroom conflicts
+        INSERT INTO schedule_conflicts (conflict_type, severity, description, schedule_id_1, schedule_id_2,
+                                      entity_id, entity_type, detected_at, resolution_status, created_at, updated_at)
+        SELECT
+            'CLASSROOM_DOUBLE_BOOKING',
+            'HIGH',
+            CONCAT('Classroom conflict: ', cr.building_code, ' ', cr.room_number,
+                   ' at ', DATE_FORMAT(s1.schedule_date, '%Y-%m-%d'), ' ',
+                   ts.start_time, '-', ts.end_time),
+            s1.id, s2.id, cr.id, 'CLASSROOM', NOW(), 'PENDING', NOW(), NOW()
+        FROM schedules s1
+        JOIN schedules s2 ON s1.classroom_id = s2.classroom_id
+        JOIN classrooms cr ON s1.classroom_id = cr.id
+        JOIN time_slots ts ON s1.time_slot_id = ts.id
+        WHERE s1.id != s2.id
+        AND s1.schedule_date = s2.schedule_date
+        AND s1.time_slot_id = s2.time_slot_id
+        AND s1.deleted_at IS NULL AND s2.deleted_at IS NULL
+        AND cr.deleted_at IS NULL
+        AND NOT EXISTS (
+            SELECT 1 FROM schedule_conflicts sc
+            WHERE ((sc.schedule_id_1 = s1.id AND sc.schedule_id_2 = s2.id) OR
+                   (sc.schedule_id_1 = s2.id AND sc.schedule_id_2 = s1.id))
+            AND sc.conflict_type = 'CLASSROOM_DOUBLE_BOOKING'
+            AND sc.deleted_at IS NULL
+        )
+        AND s1.schedule_date BETWEEN #{startDate} AND #{endDate}
+
+        UNION ALL
+
+        -- Detect teacher conflicts
+        INSERT INTO schedule_conflicts (conflict_type, severity, description, schedule_id_1, schedule_id_2,
+                                      entity_id, entity_type, detected_at, resolution_status, created_at, updated_at)
+        SELECT
+            'TEACHER_DOUBLE_BOOKING',
+            'HIGH',
+            CONCAT('Teacher conflict: ', CONCAT(u.first_name, ' ', u.last_name),
+                   ' at ', DATE_FORMAT(s1.schedule_date, '%Y-%m-%d'), ' ',
+                   ts.start_time, '-', ts.end_time),
+            s1.id, s2.id, t.id, 'TEACHER', NOW(), 'PENDING', NOW(), NOW()
+        FROM schedules s1
+        JOIN schedules s2 ON s1.course_offering_id != s2.course_offering_id
+        JOIN course_offerings co1 ON s1.course_offering_id = co1.id
+        JOIN course_offerings co2 ON s2.course_offering_id = co2.id
+        JOIN teachers t ON co1.teacher_id = t.id AND co2.teacher_id = t.id
+        JOIN users u ON t.user_id = u.id
+        JOIN time_slots ts ON s1.time_slot_id = ts.id AND s2.time_slot_id = ts.id
+        WHERE s1.schedule_date = s2.schedule_date
+        AND s1.deleted_at IS NULL AND s2.deleted_at IS NULL
+        AND co1.deleted_at IS NULL AND co2.deleted_at IS NULL
+        AND t.deleted_at IS NULL
+        AND NOT EXISTS (
+            SELECT 1 FROM schedule_conflicts sc
+            WHERE ((sc.schedule_id_1 = s1.id AND sc.schedule_id_2 = s2.id) OR
+                   (sc.schedule_id_1 = s2.id AND sc.schedule_id_2 = s1.id))
+            AND sc.conflict_type = 'TEACHER_DOUBLE_BOOKING'
+            AND sc.deleted_at IS NULL
+        )
+        AND s1.schedule_date BETWEEN #{startDate} AND #{endDate}
+    </select>
+
+    <!-- Conflict Resolution Analytics -->
+    <select id="getConflictResolutionAnalytics" resultType="java.util.Map">
+        SELECT
+            'TOTAL_CONFLICTS' as metric,
+            COUNT(*) as value
+        FROM schedule_conflicts
+        WHERE deleted_at IS NULL
+
+        UNION ALL
+
+        SELECT
+            'RESOLVED_CONFLICTS' as metric,
+            COUNT(*) as value
+        FROM schedule_conflicts
+        WHERE resolution_status = 'RESOLVED' AND deleted_at IS NULL
+
+        UNION ALL
+
+        SELECT
+            'PENDING_CONFLICTS' as metric,
+            COUNT(*) as value
+        FROM schedule_conflicts
+        WHERE resolution_status = 'PENDING' AND deleted_at IS NULL
+
+        UNION ALL
+
+        SELECT
+            'CRITICAL_PENDING' as metric,
+            COUNT(*) as value
+        FROM schedule_conflicts
+        WHERE resolution_status = 'PENDING' AND severity = 'CRITICAL' AND deleted_at IS NULL
+
+        UNION ALL
+
+        SELECT
+            'AVG_RESOLUTION_TIME_HOURS' as metric,
+            ROUND(AVG(TIMESTAMPDIFF(HOUR, detected_at, resolved_at)), 2) as value
+        FROM schedule_conflicts
+        WHERE resolution_status = 'RESOLVED' AND deleted_at IS NULL
+
+        UNION ALL
+
+        SELECT
+            'CONFLICTS_LAST_7_DAYS' as metric,
+            COUNT(*) as value
+        FROM schedule_conflicts
+        WHERE detected_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) AND deleted_at IS NULL
+    </select>
+
+    <!-- Detailed Conflict Analysis -->
+    <select id="getDetailedConflictAnalysis" resultType="java.util.Map">
+        WITH conflict_metrics AS (
+            SELECT
+                sc.conflict_type,
+                sc.severity,
+                COUNT(*) as conflict_count,
+                SUM(CASE WHEN sc.resolution_status = 'RESOLVED' THEN 1 ELSE 0 END) as resolved_count,
+                AVG(TIMESTAMPDIFF(HOUR, sc.detected_at, COALESCE(sc.resolved_at, NOW()))) as avg_resolution_time,
+                COUNT(DISTINCT sc.entity_id) as affected_entities_count
+            FROM schedule_conflicts sc
+            WHERE sc.deleted_at IS NULL
+            <if test="startDate != null">
+                AND sc.detected_at >= #{startDate}
+            </if>
+            <if test="endDate != null">
+                AND sc.detected_at <= #{endDate}
+            </if>
+            GROUP BY sc.conflict_type, sc.severity
+        )
+        SELECT
+            conflict_type,
+            severity,
+            conflict_count,
+            resolved_count,
+            ROUND((resolved_count * 100.0 / NULLIF(conflict_count, 0)), 2) as resolution_rate,
+            avg_resolution_time,
+            affected_entities_count,
+            CASE
+                WHEN conflict_count > 50 THEN 'HIGH_FREQUENCY'
+                WHEN avg_resolution_time > 168 THEN 'SLOW_RESOLUTION'
+                WHEN ROUND((resolved_count * 100.0 / NULLIF(conflict_count, 0)), 2) < 50 THEN 'LOW_RESOLUTION_RATE'
+                ELSE 'NORMAL'
+            END as risk_level
+        FROM conflict_metrics
+        ORDER BY conflict_count DESC
+    </select>
+
+    <!-- Conflict Impact Assessment -->
+    <select id="assessConflictImpact" resultType="java.util.Map">
+        SELECT
+            sc.conflict_type,
+            sc.severity,
+            sc.resolution_status,
+            COUNT(*) as conflict_count,
+            COUNT(DISTINCT sc.entity_id) as affected_entities_count,
+            COUNT(DISTINCT s1.id) + COUNT(DISTINCT s2.id) as affected_schedules_count,
+            COUNT(DISTINCT COALESCE(co1.teacher_id, co2.teacher_id)) as affected_teachers_count,
+            COUNT(DISTINCT s1.classroom_id) + COUNT(DISTINCT s2.classroom_id) as affected_classrooms_count,
+            COUNT(DISTINCT e.student_id) as potentially_affected_students_count
+        FROM schedule_conflicts sc
+        LEFT JOIN schedules s1 ON sc.schedule_id_1 = s1.id
+        LEFT JOIN schedules s2 ON sc.schedule_id_2 = s2.id
+        LEFT JOIN course_offerings co1 ON s1.course_offering_id = co1.id
+        LEFT JOIN course_offerings co2 ON s2.course_offering_id = co2.id
+        LEFT JOIN enrollments e ON (e.course_offering_id = co1.id OR e.course_offering_id = co2.id)
+                               AND e.status = 'ENROLLED'
+        WHERE sc.deleted_at IS NULL
+        AND sc.detected_at BETWEEN #{startDate} AND #{endDate}
+        GROUP BY sc.conflict_type, sc.severity, sc.resolution_status
+        ORDER BY conflict_count DESC
+    </select>
+
+    <!-- Conflict Prediction and Prevention -->
+    <select id="predictPotentialConflicts" resultType="java.util.Map">
+        WITH high_risk_schedules AS (
+            SELECT
+                s.id as schedule_id,
+                s.schedule_date,
+                ts.day_of_week,
+                ts.start_time,
+                ts.end_time,
+                cr.building_code,
+                cr.room_number,
+                CONCAT(u.first_name, ' ', u.last_name) as teacher_name,
+                c.course_code,
+                c.title as course_title,
+                COUNT(DISTINCT conflicting_s.id) as conflict_potential
+            FROM schedules s
+            JOIN course_offerings co ON s.course_offering_id = co.id
+            JOIN courses c ON co.course_id = c.id
+            JOIN teachers t ON co.teacher_id = t.id
+            JOIN users u ON t.user_id = u.id
+            JOIN classrooms cr ON s.classroom_id = cr.id
+            JOIN time_slots ts ON s.time_slot_id = ts.id
+            LEFT JOIN schedules conflicting_s ON (
+                (s.classroom_id = conflicting_s.classroom_id OR co.teacher_id = (
+                    SELECT co2.teacher_id FROM course_offerings co2 WHERE co2.id = conflicting_s.course_offering_id
+                ))
+                AND s.schedule_date = conflicting_s.schedule_date
+                AND s.time_slot_id = conflicting_s.time_slot_id
+                AND s.id != conflicting_s.id
+                AND conflicting_s.deleted_at IS NULL
+            )
+            WHERE s.deleted_at IS NULL
+            AND co.deleted_at IS NULL
+            AND s.schedule_date BETWEEN #{startDate} AND #{endDate}
+            GROUP BY s.id, s.schedule_date, ts.day_of_week, ts.start_time, ts.end_time,
+                     cr.building_code, cr.room_number, teacher_name, c.course_code, c.title
+            HAVING conflict_potential > 0
+            ORDER BY conflict_potential DESC
+        )
+        SELECT
+            schedule_id,
+            schedule_date,
+            day_of_week,
+            start_time,
+            end_time,
+            building_code,
+            room_number,
+            teacher_name,
+            course_code,
+            course_title,
+            conflict_potential,
+            CASE
+                WHEN conflict_potential > 3 THEN 'VERY_HIGH'
+                WHEN conflict_potential > 1 THEN 'HIGH'
+                WHEN conflict_potential > 0 THEN 'MEDIUM'
+                ELSE 'LOW'
+            END as risk_level,
+            CASE
+                WHEN conflict_potential > 3 THEN 'Immediate attention required'
+                WHEN conflict_potential > 1 THEN 'Monitor closely'
+                WHEN conflict_potential > 0 THEN 'Review schedule'
+                ELSE 'No action needed'
+            END as recommendation
+        FROM high_risk_schedules
+        WHERE conflict_potential >= #{minConflictPotential}
+        ORDER BY conflict_potential DESC
+    </select>
+
+    <!-- Conflict Resolution Patterns Analysis -->
+    <select id="analyzeResolutionPatterns" resultType="java.util.Map">
+        SELECT
+            sc.conflict_type,
+            sc.severity,
+            sc.resolution_status,
+            COUNT(*) as conflict_count,
+            AVG(TIMESTAMPDIFF(HOUR, sc.detected_at, COALESCE(sc.resolved_at, NOW()))) as avg_resolution_time,
+            GROUP_CONCAT(DISTINCT SUBSTRING(sc.resolution_notes, 1, 100) SEPARATOR ' | ') as common_resolution_methods
+        FROM schedule_conflicts sc
+        WHERE sc.deleted_at IS NULL
+        AND sc.detected_at BETWEEN #{startDate} AND #{endDate}
+        AND sc.resolution_notes IS NOT NULL
+        GROUP BY sc.conflict_type, sc.severity, sc.resolution_status
+        ORDER BY conflict_count DESC
+    </select>
+
+    <!-- Conflict Hotspot Detection -->
+    <select id="detectConflictHotspots" resultType="java.util.Map">
+        SELECT
+            'CLASSROOM' as hotspot_type,
+            cr.building_code,
+            cr.room_number,
+            cr.id as entity_id,
+            COUNT(DISTINCT sc.id) as conflict_count,
+            COUNT(DISTINCT sc.detected_at) as unique_days,
+            MAX(sc.detected_at) as last_conflict_date,
+            ROUND((COUNT(DISTINCT sc.detected_at) * 100.0 /
+                  DATEDIFF(#{endDate}, #{startDate} + 1)), 2) as conflict_frequency
+        FROM schedule_conflicts sc
+        JOIN schedules s ON (sc.schedule_id_1 = s.id OR sc.schedule_id_2 = s.id)
+        JOIN classrooms cr ON s.classroom_id = cr.id
+        WHERE sc.deleted_at IS NULL
+        AND s.deleted_at IS NULL
+        AND cr.deleted_at IS NULL
+        AND sc.detected_at BETWEEN #{startDate} AND #{endDate}
+        GROUP BY cr.id, cr.building_code, cr.room_number
+
+        UNION ALL
+
+        SELECT
+            'TEACHER' as hotspot_type,
+            CONCAT(u.first_name, ' ', u.last_name) as teacher_name,
+            t.employee_id,
+            t.id as entity_id,
+            COUNT(DISTINCT sc.id) as conflict_count,
+            COUNT(DISTINCT sc.detected_at) as unique_days,
+            MAX(sc.detected_at) as last_conflict_date,
+            ROUND((COUNT(DISTINCT sc.detected_at) * 100.0 /
+                  DATEDIFF(#{endDate}, #{startDate} + 1)), 2) as conflict_frequency
+        FROM schedule_conflicts sc
+        JOIN schedules s ON (sc.schedule_id_1 = s.id OR sc.schedule_id_2 = s.id)
+        JOIN course_offerings co ON s.course_offering_id = co.id
+        JOIN teachers t ON co.teacher_id = t.id
+        JOIN users u ON t.user_id = u.id
+        WHERE sc.deleted_at IS NULL
+        AND s.deleted_at IS NULL
+        AND co.deleted_at IS NULL
+        AND t.deleted_at IS NULL
+        AND sc.detected_at BETWEEN #{startDate} AND #{endDate}
+        GROUP BY t.id, u.first_name, u.last_name, t.employee_id
+
+        UNION ALL
+
+        SELECT
+            'TIME_SLOT' as hotspot_type,
+            ts.day_of_week,
+            CONCAT(ts.start_time, '-', ts.end_time) as time_range,
+            ts.id as entity_id,
+            COUNT(DISTINCT sc.id) as conflict_count,
+            COUNT(DISTINCT sc.detected_at) as unique_days,
+            MAX(sc.detected_at) as last_conflict_date,
+            ROUND((COUNT(DISTINCT sc.detected_at) * 100.0 /
+                  DATEDIFF(#{endDate}, #{startDate} + 1)), 2) as conflict_frequency
+        FROM schedule_conflicts sc
+        JOIN schedules s ON (sc.schedule_id_1 = s.id OR sc.schedule_id_2 = s.id)
+        JOIN time_slots ts ON s.time_slot_id = ts.id
+        WHERE sc.deleted_at IS NULL
+        AND s.deleted_at IS NULL
+        AND ts.deleted_at IS NULL
+        AND sc.detected_at BETWEEN #{startDate} AND #{endDate}
+        GROUP BY ts.id, ts.day_of_week, ts.start_time, ts.end_time
+        ORDER BY conflict_count DESC
+    </select>
+
+</mapper>

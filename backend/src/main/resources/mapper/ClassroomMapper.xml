@@ -1,0 +1,385 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+    "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.school.scheduling.mapper.ClassroomMapper">
+
+    <!-- Result Maps -->
+    <resultMap id="classroomWithSchedulesResultMap" type="com.school.scheduling.domain.Classroom">
+        <id property="id" column="id"/>
+        <result property="buildingCode" column="building_code"/>
+        <result property="roomNumber" column="room_number"/>
+        <result property="name" column="name"/>
+        <result property="capacity" column="capacity"/>
+        <result property="roomType" column="room_type"/>
+        <result property="hasProjector" column="has_projector"/>
+        <result property="hasComputer" column="has_computer"/>
+        <result property="hasWhiteboard" column="has_whiteboard"/>
+        <result property="specialEquipment" column="special_equipment"/>
+        <result property="isAvailable" column="is_available"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+        <result property="deletedAt" column="deleted_at"/>
+
+        <!-- Collection with Schedules -->
+        <collection property="schedules" ofType="com.school.scheduling.domain.Schedule">
+            <id property="id" column="schedule_id"/>
+            <result property="courseOfferingId" column="course_offering_id"/>
+            <result property="classroomId" column="classroom_id"/>
+            <result property="timeSlotId" column="time_slot_id"/>
+            <result property="scheduleDate" column="schedule_date"/>
+            <result property="isRecurring" column="is_recurring"/>
+            <result property="recurrencePattern" column="recurrence_pattern"/>
+            <result property="notes" column="notes"/>
+            <result property="createdAt" column="schedule_created_at"/>
+            <result property="updatedAt" column="schedule_updated_at"/>
+        </collection>
+    </resultMap>
+
+    <!-- Base Columns -->
+    <sql id="classroomColumns">
+        c.id, c.building_code, c.room_number, c.name, c.capacity, c.room_type,
+        c.has_projector, c.has_computer, c.has_whiteboard, c.special_equipment,
+        c.is_available, c.created_at, c.updated_at, c.deleted_at
+    </sql>
+
+    <!-- Complex Queries -->
+    <select id="findAvailableClassroomsAdvanced" resultMap="classroomWithSchedulesResultMap">
+        SELECT DISTINCT
+            <include refid="classroomColumns"/>
+        FROM classrooms c
+        WHERE c.deleted_at IS NULL
+        AND c.is_available = true
+        AND c.capacity >= #{minCapacity}
+        <if test="roomType != null">
+            AND c.room_type = #{roomType}
+        </if>
+        <if test="equipmentRequirements != null and !equipmentRequirements.isEmpty()">
+            AND (
+                <foreach collection="equipmentRequirements" item="equipment" open="" separator=" OR " close="">
+                    <choose>
+                        <when test="equipment == 'PROJECTOR'">
+                            c.has_projector = true
+                        </when>
+                        <when test="equipment == 'COMPUTER'">
+                            c.has_computer = true
+                        </when>
+                        <when test="equipment == 'WHITEBOARD'">
+                            c.has_whiteboard = true
+                        </when>
+                        <otherwise>
+                            JSON_CONTAINS(c.special_equipment, JSON_ARRAY(#{equipment}))
+                        </otherwise>
+                    </choose>
+                </foreach>
+            )
+        </if>
+        AND c.id NOT IN (
+            SELECT DISTINCT s.classroom_id
+            FROM schedules s
+            WHERE s.schedule_date = #{date}
+            AND s.time_slot_id = #{timeSlotId}
+            AND s.deleted_at IS NULL
+            <if test="excludeScheduleId != null">
+                AND s.id != #{excludeScheduleId}
+            </if>
+        )
+        ORDER BY c.building_code, c.room_number
+    </select>
+
+    <!-- Classroom Utilization Analysis -->
+    <select id="getClassroomUtilizationDetailed" resultType="java.util.Map">
+        SELECT
+            c.id,
+            c.building_code,
+            c.room_number,
+            c.name,
+            c.capacity,
+            c.room_type,
+            COUNT(DISTINCT s.id) as total_schedules,
+            COUNT(DISTINCT s.schedule_date) as days_used,
+            COUNT(DISTINCT s.time_slot_id) as time_slots_used,
+            ROUND((COUNT(DISTINCT s.id) * 100.0 / (SELECT COUNT(*) FROM time_slots WHERE is_active = true)), 2) as utilization_percentage,
+            COUNT(DISTINCT CASE WHEN s.is_recurring = true THEN s.id END) as recurring_schedules,
+            COUNT(DISTINCT CASE WHEN s.is_recurring = false THEN s.id END) as single_schedules,
+            GROUP_CONCAT(DISTINCT s.schedule_date) as scheduled_dates,
+            MAX(s.schedule_date) as last_used,
+            MIN(s.schedule_date) as first_used
+        FROM classrooms c
+        LEFT JOIN schedules s ON c.id = s.classroom_id AND s.deleted_at IS NULL
+        WHERE c.deleted_at IS NULL
+        AND s.schedule_date BETWEEN #{startDate} AND #{endDate}
+        GROUP BY c.id, c.building_code, c.room_number, c.name, c.capacity, c.room_type
+        HAVING COUNT(DISTINCT s.id) >= #{minUsage}
+        ORDER BY utilization_percentage DESC, total_schedules DESC
+    </select>
+
+    <!-- Advanced Availability for Recurring Events -->
+    <select id="findAvailableForRecurringAdvanced" resultMap="classroomWithSchedulesResultMap">
+        SELECT DISTINCT
+            <include refid="classroomColumns"/>
+        FROM classrooms c
+        WHERE c.deleted_at IS NULL
+        AND c.is_available = true
+        AND c.capacity >= #{minCapacity}
+        <if test="roomType != null">
+            AND c.room_type = #{roomType}
+        </if>
+        AND NOT EXISTS (
+            SELECT 1 FROM schedules s
+            WHERE s.classroom_id = c.id
+            AND s.deleted_at IS NULL
+            AND s.schedule_date BETWEEN #{startDate} AND #{endDate}
+            AND s.time_slot_id = #{timeSlotId}
+            <if test="excludeSchedules != null and !excludeSchedules.isEmpty()">
+                AND s.id NOT IN
+                <foreach collection="excludeSchedules" item="excludeId" open="(" separator="," close=")">
+                    #{excludeId}
+                </foreach>
+            </if>
+        )
+        ORDER BY c.building_code, c.room_number
+    </select>
+
+    <!-- Equipment Search with JSON -->
+    <select id="searchBySpecialEquipmentAdvanced" resultMap="classroomWithSchedulesResultMap">
+        SELECT
+            <include refid="classroomColumns"/>
+        FROM classrooms c
+        WHERE c.deleted_at IS NULL
+        AND c.is_available = true
+        <if test="equipmentList != null and !equipmentList.isEmpty()">
+            AND (
+                <foreach collection="equipmentList" item="equipment" open="" separator=" OR " close="">
+                    JSON_CONTAINS(c.special_equipment, JSON_ARRAY(#{equipment}))
+                </foreach>
+            )
+        </if>
+        <if test="minCapacity != null">
+            AND c.capacity >= #{minCapacity}
+        </if>
+        <if test="roomType != null">
+            AND c.room_type = #{roomType}
+        </if>
+        ORDER BY c.building_code, c.room_number
+    </select>
+
+    <!-- Building Analysis Dashboard -->
+    <select id="getBuildingAnalysisDashboard" resultType="java.util.Map">
+        WITH building_stats AS (
+            SELECT
+                c.building_code,
+                COUNT(*) as total_classrooms,
+                SUM(c.capacity) as total_capacity,
+                AVG(c.capacity) as avg_capacity,
+                SUM(CASE WHEN c.has_projector = true THEN 1 ELSE 0 END) as projector_count,
+                SUM(CASE WHEN c.has_computer = true THEN 1 ELSE 0 END) as computer_count,
+                SUM(CASE WHEN c.has_whiteboard = true THEN 1 ELSE 0 END) as whiteboard_count,
+                SUM(CASE WHEN c.is_available = true THEN 1 ELSE 0 END) as available_count
+            FROM classrooms c
+            WHERE c.deleted_at IS NULL
+            GROUP BY c.building_code
+        ),
+        utilization_stats AS (
+            SELECT
+                c.building_code,
+                COUNT(DISTINCT s.id) as scheduled_sessions,
+                COUNT(DISTINCT s.schedule_date) as days_used,
+                COUNT(DISTINCT c.id) as classrooms_used
+            FROM classrooms c
+            LEFT JOIN schedules s ON c.id = s.classroom_id AND s.deleted_at IS NULL
+            WHERE c.deleted_at IS NULL
+            AND s.schedule_date BETWEEN #{startDate} AND #{endDate}
+            GROUP BY c.building_code
+        )
+        SELECT
+            bs.building_code,
+            bs.total_classrooms,
+            bs.total_capacity,
+            bs.avg_capacity,
+            bs.projector_count,
+            bs.computer_count,
+            bs.whiteboard_count,
+            bs.available_count,
+            COALESCE(us.scheduled_sessions, 0) as scheduled_sessions,
+            COALESCE(us.days_used, 0) as days_used,
+            COALESCE(us.classrooms_used, 0) as classrooms_used,
+            ROUND((COALESCE(us.classrooms_used, 0) * 100.0 / bs.total_classrooms), 2) as utilization_rate
+        FROM building_stats bs
+        LEFT JOIN utilization_stats us ON bs.building_code = us.building_code
+        ORDER BY bs.building_code
+    </select>
+
+    <!-- Conflict Detection with Time Analysis -->
+    <select id="findClassroomConflictsDetailed" resultType="java.util.Map">
+        SELECT
+            c.id as classroom_id,
+            c.building_code,
+            c.room_number,
+            c.name,
+            s1.id as schedule1_id,
+            s2.id as schedule2_id,
+            s1.schedule_date as conflict_date,
+            ts.day_of_week,
+            ts.start_time,
+            ts.end_time,
+            CONCAT(co1.course_code, ' Section ', co1.section_number) as course1_name,
+            CONCAT(co2.course_code, ' Section ', co2.section_number) as course2_name,
+            CONCAT(u1.first_name, ' ', u1.last_name) as teacher1_name,
+            CONCAT(u2.first_name, ' ', u2.last_name) as teacher2_name
+        FROM schedules s1
+        JOIN schedules s2 ON s1.classroom_id = s2.classroom_id
+        JOIN classrooms c ON s1.classroom_id = c.id
+        JOIN time_slots ts ON s1.time_slot_id = ts.id
+        JOIN course_offerings co1 ON s1.course_offering_id = co1.id
+        JOIN course_offerings co2 ON s2.course_offering_id = co2.id
+        JOIN teachers t1 ON co1.teacher_id = t1.id
+        JOIN teachers t2 ON co2.teacher_id = t2.id
+        JOIN users u1 ON t1.user_id = u1.id
+        JOIN users u2 ON t2.user_id = u2.id
+        WHERE s1.id != s2.id
+        AND s1.schedule_date = s2.schedule_date
+        AND s1.time_slot_id = s2.time_slot_id
+        AND s1.deleted_at IS NULL
+        AND s2.deleted_at IS NULL
+        AND c.deleted_at IS NULL
+        AND s1.schedule_date BETWEEN #{startDate} AND #{endDate}
+        ORDER BY c.building_code, c.room_number, conflict_date, ts.start_time
+    </select>
+
+    <!-- Classroom Search with Full-Text -->
+    <select id="searchClassroomsFullText" resultMap="classroomWithSchedulesResultMap">
+        SELECT
+            <include refid="classroomColumns"/>
+        FROM classrooms c
+        WHERE c.deleted_at IS NULL
+        <if test="searchText != null and searchText != ''">
+            AND (
+                c.building_code LIKE CONCAT('%', #{searchText}, '%')
+                OR c.room_number LIKE CONCAT('%', #{searchText}, '%')
+                OR c.name LIKE CONCAT('%', #{searchText}, '%')
+                OR JSON_SEARCH(c.special_equipment, 'one', #{searchText}) IS NOT NULL
+            )
+        </if>
+        <if test="roomType != null">
+            AND c.room_type = #{roomType}
+        </if>
+        <if test="minCapacity != null">
+            AND c.capacity >= #{minCapacity}
+        </if>
+        <if test="maxCapacity != null">
+            AND c.capacity <= #{maxCapacity}
+        </if>
+        <if test="hasProjector != null">
+            AND c.has_projector = #{hasProjector}
+        </if>
+        <if test="hasComputer != null">
+            AND c.has_computer = #{hasComputer}
+        </if>
+        <if test="hasWhiteboard != null">
+            AND c.has_whiteboard = #{hasWhiteboard}
+        </if>
+        <if test="isAvailable != null">
+            AND c.is_available = #{isAvailable}
+        </if>
+        ORDER BY c.building_code, c.room_number
+    </select>
+
+    <!-- Equipment Inventory Report -->
+    <select id="getEquipmentInventoryReport" resultType="java.util.Map">
+        SELECT
+            'PROJECTOR' as equipment_type,
+            SUM(CASE WHEN has_projector = true THEN 1 ELSE 0 END) as count,
+            SUM(CASE WHEN has_projector = true AND is_available = true THEN 1 ELSE 0 END) as available_count
+        FROM classrooms
+        WHERE deleted_at IS NULL
+
+        UNION ALL
+
+        SELECT
+            'COMPUTER' as equipment_type,
+            SUM(CASE WHEN has_computer = true THEN 1 ELSE 0 END) as count,
+            SUM(CASE WHEN has_computer = true AND is_available = true THEN 1 ELSE 0 END) as available_count
+        FROM classrooms
+        WHERE deleted_at IS NULL
+
+        UNION ALL
+
+        SELECT
+            'WHITEBOARD' as equipment_type,
+            SUM(CASE WHEN has_whiteboard = true THEN 1 ELSE 0 END) as count,
+            SUM(CASE WHEN has_whiteboard = true AND is_available = true THEN 1 ELSE 0 END) as available_count
+        FROM classrooms
+        WHERE deleted_at IS NULL
+
+        UNION ALL
+
+        SELECT
+            JSON_UNQUOTE(JSON_EXTRACT(special_equipment, '$[0]')) as equipment_type,
+            COUNT(*) as count,
+            SUM(CASE WHEN is_available = true THEN 1 ELSE 0 END) as available_count
+        FROM classrooms
+        WHERE deleted_at IS NULL
+        AND special_equipment IS NOT NULL
+        AND JSON_LENGTH(special_equipment) > 0
+        GROUP BY JSON_UNQUOTE(JSON_EXTRACT(special_equipment, '$[0]'))
+    </select>
+
+    <!-- Classroom Maintenance Schedule -->
+    <select id="getClassroomsNeedingMaintenance" resultType="java.util.Map">
+        SELECT
+            c.id,
+            c.building_code,
+            c.room_number,
+            c.name,
+            c.capacity,
+            c.room_type,
+            (
+                SELECT COUNT(*)
+                FROM schedules s
+                WHERE s.classroom_id = c.id
+                AND s.schedule_date BETWEEN #{startDate} AND #{endDate}
+                AND s.deleted_at IS NULL
+            ) as usage_count,
+            (
+                SELECT COUNT(*)
+                FROM schedules s
+                WHERE s.classroom_id = c.id
+                AND s.schedule_date > DATE_SUB(CURRENT_DATE, INTERVAL 30 DAY)
+                AND s.deleted_at IS NULL
+            ) as recent_usage_count,
+            CASE
+                WHEN (
+                    SELECT COUNT(*)
+                    FROM schedules s
+                    WHERE s.classroom_id = c.id
+                    AND s.schedule_date > DATE_SUB(CURRENT_DATE, INTERVAL 30 DAY)
+                    AND s.deleted_at IS NULL
+                ) > #{highUsageThreshold} THEN 'HIGH_USAGE'
+                WHEN (
+                    SELECT COUNT(*)
+                    FROM schedules s
+                    WHERE s.classroom_id = c.id
+                    AND s.schedule_date > DATE_SUB(CURRENT_DATE, INTERVAL 30 DAY)
+                    AND s.deleted_at IS NULL
+                ) = 0 THEN 'LOW_USAGE'
+                ELSE 'NORMAL_USAGE'
+            END as usage_category
+        FROM classrooms c
+        WHERE c.deleted_at IS NULL
+        AND c.is_available = true
+        ORDER BY usage_count DESC
+    </select>
+
+    <!-- Batch Operations with Validation -->
+    <update id="batchUpdateAvailability">
+        UPDATE classrooms
+        SET is_available = #{isAvailable},
+            updated_at = #{updatedAt}
+        WHERE id IN
+        <foreach collection="classroomIds" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </update>
+
+</mapper>
