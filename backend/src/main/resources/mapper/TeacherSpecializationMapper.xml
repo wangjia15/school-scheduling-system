@@ -1,0 +1,231 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+    "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.school.scheduling.mapper.TeacherSpecializationMapper">
+
+    <resultMap id="teacherSpecializationWithDetailsResultMap" type="com.school.scheduling.domain.TeacherSpecialization" extends="teacherSpecializationResultMap">
+        <association property="teacher" javaType="com.school.scheduling.domain.Teacher">
+            <id property="id" column="teacher_id"/>
+            <result property="userId" column="teacher_user_id"/>
+            <result property="employeeId" column="teacher_employee_id"/>
+            <result property="firstName" column="teacher_first_name"/>
+            <result property="lastName" column="teacher_last_name"/>
+            <result property="email" column="teacher_email"/>
+            <result property="departmentId" column="teacher_department_id"/>
+            <result property="isActive" column="teacher_is_active"/>
+        </association>
+    </resultMap>
+
+    <!-- Complex query for finding teachers qualified for specific courses -->
+    <select id="findQualifiedTeachersForCourse" resultMap="teacherSpecializationWithDetailsResultMap">
+        SELECT
+            ts.*,
+            t.id as teacher_id,
+            t.user_id as teacher_user_id,
+            t.employee_id as teacher_employee_id,
+            t.first_name as teacher_first_name,
+            t.last_name as teacher_last_name,
+            t.email as teacher_email,
+            t.department_id as teacher_department_id,
+            t.is_active as teacher_is_active
+        FROM teacher_specializations ts
+        JOIN teachers t ON ts.teacher_id = t.id
+        LEFT JOIN departments d ON t.department_id = d.id
+        WHERE ts.subject_code = #{subjectCode}
+        AND ts.proficiency_level IN
+            <foreach item="level" collection="acceptableLevels" open="(" separator="," close=")">
+                #{level}
+            </foreach>
+        AND ts.years_experience >= #{minYearsExperience}
+        AND ts.deleted_at IS NULL
+        AND t.is_active = true
+        <if test="departmentId != null">
+            AND t.department_id = #{departmentId}
+        </if>
+        ORDER BY
+            CASE ts.proficiency_level
+                WHEN 'EXPERT' THEN 1
+                WHEN 'ADVANCED' THEN 2
+                WHEN 'INTERMEDIATE' THEN 3
+                ELSE 4
+            END,
+            ts.years_experience DESC,
+            t.last_name,
+            t.first_name
+    </select>
+
+    <!-- Query for finding subject coverage gaps -->
+    <select id="findSubjectCoverageGaps" resultType="com.school.scheduling.mapper.TeacherSpecializationMapper$SubjectCoverage">
+        SELECT
+            c.subject_code,
+            c.title as course_title,
+            c.credits,
+            COUNT(DISTINCT ts.teacher_id) as qualified_teachers_count,
+            COUNT(DISTINCT CASE WHEN ts.proficiency_level = 'EXPERT' THEN ts.teacher_id END) as expert_teachers_count,
+            AVG(ts.years_experience) as average_experience
+        FROM courses c
+        LEFT JOIN teacher_specializations ts ON c.subject_code = ts.subject_code AND ts.deleted_at IS NULL
+        LEFT JOIN teachers t ON ts.teacher_id = t.id AND t.is_active = true
+        WHERE c.is_active = true
+        AND c.deleted_at IS NULL
+        GROUP BY c.subject_code, c.title, c.credits
+        HAVING qualified_teachers_count &lt; #{minimumRequired}
+            OR expert_teachers_count &lt; #{minimumExperts}
+        ORDER BY qualified_teachers_count ASC, expert_teachers_count ASC
+    </select>
+
+    <!-- Query for teacher expertise analysis -->
+    <select id="getTeacherExpertiseAnalysis" resultMap="teacherSpecializationWithDetailsResultMap">
+        SELECT
+            ts.*,
+            t.id as teacher_id,
+            t.user_id as teacher_user_id,
+            t.employee_id as teacher_employee_id,
+            t.first_name as teacher_first_name,
+            t.last_name as teacher_last_name,
+            t.email as teacher_email,
+            t.department_id as teacher_department_id,
+            t.is_active as teacher_is_active,
+            COUNT(DISTINCT co.id) as courses_taught_count,
+            AVG(co.current_enrollment) as average_class_size
+        FROM teacher_specializations ts
+        JOIN teachers t ON ts.teacher_id = t.id
+        LEFT JOIN course_offerings co ON ts.teacher_id = co.teacher_id
+            AND co.deleted_at IS NULL
+            AND co.semester_id IN (
+                SELECT id FROM semesters
+                WHERE is_current = true AND deleted_at IS NULL
+            )
+        WHERE ts.teacher_id = #{teacherId}
+        AND ts.deleted_at IS NULL
+        AND t.is_active = true
+        GROUP BY ts.id, t.id
+        ORDER BY ts.proficiency_level DESC, ts.years_experience DESC
+    </select>
+
+    <!-- Query for finding teachers with multiple specializations -->
+    <select id="findTeachersWithMultipleSpecializations" resultMap="teacherSpecializationWithDetailsResultMap">
+        SELECT
+            ts.*,
+            t.id as teacher_id,
+            t.user_id as teacher_user_id,
+            t.employee_id as teacher_employee_id,
+            t.first_name as teacher_first_name,
+            t.last_name as teacher_last_name,
+            t.email as teacher_email,
+            t.department_id as teacher_department_id,
+            t.is_active as teacher_is_active,
+            COUNT(*) OVER (PARTITION BY ts.teacher_id) as specialization_count
+        FROM teacher_specializations ts
+        JOIN teachers t ON ts.teacher_id = t.id
+        WHERE ts.deleted_at IS NULL
+        AND t.is_active = true
+        HAVING specialization_count >= #{minimumSpecializations}
+        ORDER BY specialization_count DESC, t.last_name, t.first_name
+    </select>
+
+    <!-- Query for specialization trends analysis -->
+    <select id="getSpecializationTrends" resultType="com.school.scheduling.mapper.TeacherSpecializationMapper$SpecializationTrend">
+        SELECT
+            subject_code,
+            proficiency_level,
+            COUNT(*) as total_count,
+            AVG(years_experience) as average_experience,
+            SUM(CASE WHEN years_experience &lt; 5 THEN 1 ELSE 0 END) as junior_count,
+            SUM(CASE WHEN years_experience BETWEEN 5 AND 10 THEN 1 ELSE 0 END) as mid_level_count,
+            SUM(CASE WHEN years_experience > 10 THEN 1 ELSE 0 END) as senior_count
+        FROM teacher_specializations
+        WHERE deleted_at IS NULL
+        GROUP BY subject_code, proficiency_level
+        ORDER BY subject_code,
+            CASE proficiency_level
+                WHEN 'EXPERT' THEN 1
+                WHEN 'ADVANCED' THEN 2
+                WHEN 'INTERMEDIATE' THEN 3
+                ELSE 4
+            END
+    </select>
+
+    <!-- Query for finding underrepresented subjects -->
+    <select id="findUnderrepresentedSubjects" resultType="com.school.scheduling.mapper.TeacherSpecializationMapper$SubjectRepresentation">
+        SELECT
+            c.subject_code,
+            c.title as course_title,
+            COUNT(c.id) as course_count,
+            COUNT(DISTINCT ts.teacher_id) as specialized_teachers_count,
+            COUNT(DISTINCT CASE WHEN ts.proficiency_level = 'EXPERT' THEN ts.teacher_id END) as expert_teachers_count,
+            (COUNT(c.id) * 1.0 / NULLIF(COUNT(DISTINCT ts.teacher_id), 0)) as courses_per_teacher_ratio
+        FROM courses c
+        LEFT JOIN teacher_specializations ts ON c.subject_code = ts.subject_code AND ts.deleted_at IS NULL
+        LEFT JOIN teachers t ON ts.teacher_id = t.id AND t.is_active = true
+        WHERE c.is_active = true
+        AND c.deleted_at IS NULL
+        GROUP BY c.subject_code, c.title
+        HAVING courses_per_teacher_ratio > #{ratioThreshold}
+            OR specialized_teachers_count = 0
+        ORDER BY courses_per_teacher_ratio DESC, specialized_teachers_count ASC
+    </select>
+
+    <!-- Batch operations -->
+    <insert id="batchInsert" parameterType="java.util.List">
+        INSERT INTO teacher_specializations
+        (teacher_id, subject_code, proficiency_level, years_experience, created_at, updated_at)
+        VALUES
+        <foreach collection="list" item="spec" separator=",">
+            (#{spec.teacherId}, #{spec.subjectCode}, #{spec.proficiencyLevel},
+             #{spec.yearsExperience}, #{spec.createdAt}, #{spec.updatedAt})
+        </foreach>
+    </insert>
+
+    <update id="batchUpdateProficiencyLevels" parameterType="java.util.List">
+        <foreach collection="list" item="update" separator=";">
+            UPDATE teacher_specializations
+            SET proficiency_level = #{update.proficiencyLevel},
+                years_experience = #{update.yearsExperience},
+                updated_at = #{update.updatedAt}
+            WHERE id = #{update.id}
+        </foreach>
+    </update>
+
+    <!-- Utility result classes -->
+    <resultMap id="subjectCoverageResultMap" type="com.school.scheduling.mapper.TeacherSpecializationMapper$SubjectCoverage">
+        <result property="subjectCode" column="subject_code"/>
+        <result property="courseTitle" column="course_title"/>
+        <result property="credits" column="credits"/>
+        <result property="qualifiedTeachersCount" column="qualified_teachers_count"/>
+        <result property="expertTeachersCount" column="expert_teachers_count"/>
+        <result property="averageExperience" column="average_experience"/>
+    </resultMap>
+
+    <resultMap id="specializationTrendResultMap" type="com.school.scheduling.mapper.TeacherSpecializationMapper$SpecializationTrend">
+        <result property="subjectCode" column="subject_code"/>
+        <result property="proficiencyLevel" column="proficiency_level"/>
+        <result property="totalCount" column="total_count"/>
+        <result property="averageExperience" column="average_experience"/>
+        <result property="juniorCount" column="junior_count"/>
+        <result property="midLevelCount" column="mid_level_count"/>
+        <result property="seniorCount" column="senior_count"/>
+    </resultMap>
+
+    <resultMap id="subjectRepresentationResultMap" type="com.school.scheduling.mapper.TeacherSpecializationMapper$SubjectRepresentation">
+        <result property="subjectCode" column="subject_code"/>
+        <result property="courseTitle" column="course_title"/>
+        <result property="courseCount" column="course_count"/>
+        <result property="specializedTeachersCount" column="specialized_teachers_count"/>
+        <result property="expertTeachersCount" column="expert_teachers_count"/>
+        <result property="coursesPerTeacherRatio" column="courses_per_teacher_ratio"/>
+    </resultMap>
+
+    <!-- Parameter classes for complex queries -->
+    <parameterMap id="subjectCoverageParams" type="map">
+        <parameter property="subjectCode" javaType="String"/>
+        <parameter property="minimumRequired" javaType="Integer"/>
+        <parameter property="minimumExperts" javaType="Integer"/>
+    </parameterMap>
+
+    <parameterMap id="teacherExpertiseParams" type="map">
+        <parameter property="teacherId" javaType="Long"/>
+    </parameterMap>
+
+</mapper>

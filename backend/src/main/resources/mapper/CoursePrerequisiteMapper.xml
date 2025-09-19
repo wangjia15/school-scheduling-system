@@ -1,0 +1,321 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+    "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.school.scheduling.mapper.CoursePrerequisiteMapper">
+
+    <resultMap id="coursePrerequisiteWithDetailsResultMap" type="com.school.scheduling.domain.CoursePrerequisite" extends="coursePrerequisiteResultMap">
+        <association property="course" javaType="com.school.scheduling.domain.Course">
+            <id property="id" column="course_id"/>
+            <result property="courseIdentifier" column="course_identifier"/>
+            <result property="title" column="course_title"/>
+            <result property="credits" column="course_credits"/>
+            <result property="level" column="course_level"/>
+            <result property="departmentId" column="course_department_id"/>
+        </association>
+        <association property="prerequisiteCourse" javaType="com.school.scheduling.domain.Course">
+            <id property="id" column="prerequisite_course_id"/>
+            <result property="courseIdentifier" column="prereq_course_identifier"/>
+            <result property="title" column="prereq_course_title"/>
+            <result property="credits" column="prereq_course_credits"/>
+            <result property="level" column="prereq_course_level"/>
+            <result property="departmentId" column="prereq_course_department_id"/>
+        </association>
+    </resultMap>
+
+    <!-- Complex query for complete prerequisite chain analysis -->
+    <select id="getPrerequisiteChainAnalysis" resultMap="coursePrerequisiteWithDetailsResultMap">
+        WITH RECURSIVE prerequisite_chain AS (
+            -- Base case: direct prerequisites
+            SELECT
+                cp.id,
+                cp.course_id,
+                cp.prerequisite_course_id,
+                cp.is_mandatory,
+                cp.minimum_grade,
+                cp.created_at,
+                cp.updated_at,
+                c.course_identifier,
+                c.title as course_title,
+                c.credits as course_credits,
+                c.level as course_level,
+                c.department_id as course_department_id,
+                prereq_c.course_identifier as prereq_course_identifier,
+                prereq_c.title as prereq_course_title,
+                prereq_c.credits as prereq_course_credits,
+                prereq_c.level as prereq_course_level,
+                prereq_c.department_id as prereq_course_department_id,
+                1 as chain_level,
+                ARRAY[cp.course_id, cp.prerequisite_course_id] as path_ids,
+                ARRAY[c.course_identifier, prereq_c.course_identifier] as path_codes
+            FROM course_prerequisites cp
+            JOIN courses c ON cp.course_id = c.id
+            JOIN courses prereq_c ON cp.prerequisite_course_id = prereq_c.id
+            WHERE cp.course_id = #{courseId}
+            AND cp.deleted_at IS NULL
+            AND c.deleted_at IS NULL
+            AND prereq_c.deleted_at IS NULL
+
+            UNION ALL
+
+            -- Recursive case: prerequisites of prerequisites
+            SELECT
+                cp.id,
+                cp.course_id,
+                cp.prerequisite_course_id,
+                cp.is_mandatory,
+                cp.minimum_grade,
+                cp.created_at,
+                cp.updated_at,
+                c.course_identifier,
+                c.title as course_title,
+                c.credits as course_credits,
+                c.level as course_level,
+                c.department_id as course_department_id,
+                prereq_c.course_identifier as prereq_course_identifier,
+                prereq_c.title as prereq_course_title,
+                prereq_c.credits as prereq_course_credits,
+                prereq_c.level as prereq_course_level,
+                prereq_c.department_id as prereq_course_department_id,
+                pc.chain_level + 1,
+                pc.path_ids || cp.prerequisite_course_id,
+                pc.path_codes || prereq_c.course_identifier
+            FROM course_prerequisites cp
+            JOIN courses c ON cp.course_id = c.id
+            JOIN courses prereq_c ON cp.prerequisite_course_id = prereq_c.id
+            JOIN prerequisite_chain pc ON cp.course_id = pc.prerequisite_course_id
+            WHERE cp.deleted_at IS NULL
+            AND c.deleted_at IS NULL
+            AND prereq_c.deleted_at IS NULL
+            AND NOT cp.prerequisite_course_id = ANY(pc.path_ids) -- Prevent circular references
+            AND pc.chain_level &lt; #{maxDepth} -- Limit recursion depth
+        )
+        SELECT * FROM prerequisite_chain
+        ORDER BY chain_level, is_mandatory DESC, minimum_grade DESC
+    </select>
+
+    <!-- Query for detecting circular prerequisites -->
+    <select id="detectCircularPrerequisites" resultType="com.school.scheduling.mapper.CoursePrerequisiteMapper$CircularPrerequisite">
+        WITH RECURSIVE potential_cycles AS (
+            SELECT
+                cp.course_id,
+                cp.prerequisite_course_id,
+                ARRAY[cp.course_id] as visited_path,
+                1 as depth
+            FROM course_prerequisites cp
+            WHERE cp.deleted_at IS NULL
+
+            UNION ALL
+
+            SELECT
+                cp.course_id,
+                cp.prerequisite_course_id,
+                pc.visited_path || cp.course_id,
+                pc.depth + 1
+            FROM course_prerequisites cp
+            JOIN potential_cycles pc ON cp.course_id = pc.prerequisite_course_id
+            WHERE cp.deleted_at IS NULL
+            AND NOT cp.course_id = ANY(pc.visited_path)
+            AND pc.depth &lt; 10
+        )
+        SELECT
+            c1.course_identifier as course_identifier,
+            c1.title as course_title,
+            c2.course_identifier as prerequisite_identifier,
+            c2.title as prerequisite_title,
+            pc.depth as cycle_depth,
+            pc.visited_path as cycle_path
+        FROM potential_cycles pc
+        JOIN courses c1 ON pc.course_id = c1.id
+        JOIN courses c2 ON pc.prerequisite_course_id = c2.id
+        WHERE pc.prerequisite_course_id = ANY(pc.visited_path)
+        AND c1.deleted_at IS NULL
+        AND c2.deleted_at IS NULL
+        ORDER BY pc.depth, c1.course_identifier
+    </select>
+
+    <!-- Query for course progression analysis -->
+    <select id="getCourseProgressionAnalysis" resultType="com.school.scheduling.mapper.CoursePrerequisiteMapper$ProgressionAnalysis">
+        SELECT
+            c.course_identifier,
+            c.title,
+            c.level,
+            c.credits,
+            COUNT(DISTINCT cp.id) as prerequisite_count,
+            COUNT(DISTINCT CASE WHEN cp.is_mandatory = true THEN cp.id END) as mandatory_count,
+            COUNT(DISTINCT CASE WHEN cp.minimum_grade IS NOT NULL THEN cp.id END) as grade_requirement_count,
+            COALESCE(AVG(cp.minimum_grade), 0) as average_minimum_grade,
+            COALESCE(MAX(cp.minimum_grade), 0) as highest_minimum_grade,
+            COALESCE(MIN(cp.minimum_grade), 100) as lowest_minimum_grade,
+            -- Count courses that require this course as a prerequisite
+            (
+                SELECT COUNT(*)
+                FROM course_prerequisites cp2
+                WHERE cp2.prerequisite_course_id = c.id
+                AND cp2.deleted_at IS NULL
+            ) as is_prerequisite_for_count
+        FROM courses c
+        LEFT JOIN course_prerequisites cp ON c.id = cp.course_id AND cp.deleted_at IS NULL
+        WHERE c.deleted_at IS NULL
+        AND c.is_active = true
+        GROUP BY c.id, c.course_identifier, c.title, c.level, c.credits
+        HAVING prerequisite_count > 0 OR is_prerequisite_for_count > 0
+        ORDER BY
+            CASE c.level
+                WHEN 'UNDERGRADUATE' THEN 1
+                WHEN 'GRADUATE' THEN 2
+                WHEN 'PHD' THEN 3
+                ELSE 4
+            END,
+            c.course_identifier
+    </select>
+
+    <!-- Query for finding courses with no prerequisites -->
+    <select id="findCoursesWithoutPrerequisites" resultType="com.school.scheduling.mapper.CoursePrerequisiteMapper$CourseWithoutPrerequisites">
+        SELECT
+            c.id,
+            c.course_identifier,
+            c.title,
+            c.level,
+            c.credits,
+            d.name as department_name,
+            (
+                SELECT COUNT(*)
+                FROM course_prerequisites cp2
+                WHERE cp2.prerequisite_course_id = c.id
+                AND cp2.deleted_at IS NULL
+            ) as is_required_by_count
+        FROM courses c
+        LEFT JOIN departments d ON c.department_id = d.id
+        WHERE c.deleted_at IS NULL
+        AND c.is_active = true
+        AND NOT EXISTS (
+            SELECT 1 FROM course_prerequisites cp
+            WHERE cp.course_id = c.id AND cp.deleted_at IS NULL
+        )
+        ORDER BY
+            CASE c.level
+                WHEN 'UNDERGRADUATE' THEN 1
+                WHEN 'GRADUATE' THEN 2
+                WHEN 'PHD' THEN 3
+                ELSE 4
+            END,
+            c.course_identifier
+    </select>
+
+    <!-- Query for prerequisite compliance check -->
+    <select id="checkPrerequisiteCompliance" resultType="com.school.scheduling.mapper.CoursePrerequisiteMapper$PrerequisiteCompliance">
+        SELECT
+            s.id as student_id,
+            s.student_id as student_identifier,
+            c.id as course_id,
+            c.course_identifier,
+            c.title as course_title,
+            cp.id as prerequisite_id,
+            prereq_c.course_identifier as prerequisite_identifier,
+            prereq_c.title as prerequisite_title,
+            cp.is_mandatory,
+            cp.minimum_grade,
+            COALESCE(e.grade, -1) as achieved_grade,
+            COALESCE(e.status, 'NOT_ENROLLED') as enrollment_status,
+            CASE
+                WHEN e.grade IS NULL THEN 'NOT_TAKEN'
+                WHEN cp.minimum_grade IS NULL THEN 'SATISFIED'
+                WHEN e.grade >= cp.minimum_grade THEN 'SATISFIED'
+                ELSE 'NOT_SATISFIED'
+            END as compliance_status,
+            CASE
+                WHEN cp.is_mandatory = false THEN 'OPTIONAL'
+                WHEN e.grade >= COALESCE(cp.minimum_grade, 0) THEN 'COMPLETED'
+                WHEN e.grade IS NULL THEN 'PENDING'
+                ELSE 'FAILED'
+            END as completion_status
+        FROM students s
+        CROSS JOIN courses c
+        LEFT JOIN course_prerequisites cp ON c.id = cp.course_id AND cp.deleted_at IS NULL
+        LEFT JOIN courses prereq_c ON cp.prerequisite_course_id = prereq_c.id AND prereq_c.deleted_at IS NULL
+        LEFT JOIN enrollments e ON s.id = e.student_id
+            AND cp.prerequisite_course_id = (
+                SELECT co.course_id FROM course_offerings co
+                WHERE co.id = e.course_offering_id
+            )
+        WHERE s.id = #{studentId}
+        AND c.id = #{courseId}
+        AND cp.id IS NOT NULL
+        AND s.deleted_at IS NULL
+        AND c.deleted_at IS NULL
+        ORDER BY cp.is_mandatory DESC, cp.minimum_grade DESC
+    </select>
+
+    <!-- Batch operations -->
+    <insert id="batchInsert" parameterType="java.util.List">
+        INSERT INTO course_prerequisites
+        (course_id, prerequisite_course_id, is_mandatory, minimum_grade, created_at, updated_at)
+        VALUES
+        <foreach collection="list" item="prereq" separator=",">
+            (#{prereq.courseId}, #{prereq.prerequisiteCourseId}, #{prereq.isMandatory},
+             #{prereq.minimumGrade}, #{prereq.createdAt}, #{prereq.updatedAt})
+        </foreach>
+    </insert>
+
+    <update id="batchUpdateMinimumGrades" parameterType="java.util.List">
+        <foreach collection="list" item="update" separator=";">
+            UPDATE course_prerequisites
+            SET minimum_grade = #{update.minimumGrade},
+                updated_at = #{update.updatedAt}
+            WHERE id = #{update.id}
+        </foreach>
+    </update>
+
+    <!-- Utility result classes -->
+    <resultMap id="circularPrerequisiteResultMap" type="com.school.scheduling.mapper.CoursePrerequisiteMapper$CircularPrerequisite">
+        <result property="courseIdentifier" column="course_identifier"/>
+        <result property="courseTitle" column="course_title"/>
+        <result property="prerequisiteIdentifier" column="prerequisite_identifier"/>
+        <result property="prerequisiteTitle" column="prerequisite_title"/>
+        <result property="cycleDepth" column="cycle_depth"/>
+        <result property="cyclePath" column="cycle_path"/>
+    </resultMap>
+
+    <resultMap id="progressionAnalysisResultMap" type="com.school.scheduling.mapper.CoursePrerequisiteMapper$ProgressionAnalysis">
+        <result property="courseIdentifier" column="course_identifier"/>
+        <result property="title" column="title"/>
+        <result property="level" column="level"/>
+        <result property="credits" column="credits"/>
+        <result property="prerequisiteCount" column="prerequisite_count"/>
+        <result property="mandatoryCount" column="mandatory_count"/>
+        <result property="gradeRequirementCount" column="grade_requirement_count"/>
+        <result property="averageMinimumGrade" column="average_minimum_grade"/>
+        <result property="highestMinimumGrade" column="highest_minimum_grade"/>
+        <result property="lowestMinimumGrade" column="lowest_minimum_grade"/>
+        <result property="isPrerequisiteForCount" column="is_prerequisite_for_count"/>
+    </resultMap>
+
+    <resultMap id="courseWithoutPrerequisitesResultMap" type="com.school.scheduling.mapper.CoursePrerequisiteMapper$CourseWithoutPrerequisites">
+        <result property="id" column="id"/>
+        <result property="courseIdentifier" column="course_identifier"/>
+        <result property="title" column="title"/>
+        <result property="level" column="level"/>
+        <result property="credits" column="credits"/>
+        <result property="departmentName" column="department_name"/>
+        <result property="isRequiredByCount" column="is_required_by_count"/>
+    </resultMap>
+
+    <resultMap id="prerequisiteComplianceResultMap" type="com.school.scheduling.mapper.CoursePrerequisiteMapper$PrerequisiteCompliance">
+        <result property="studentId" column="student_id"/>
+        <result property="studentIdentifier" column="student_identifier"/>
+        <result property="courseId" column="course_id"/>
+        <result property="courseIdentifier" column="course_identifier"/>
+        <result property="courseTitle" column="course_title"/>
+        <result property="prerequisiteId" column="prerequisite_id"/>
+        <result property="prerequisiteIdentifier" column="prerequisite_identifier"/>
+        <result property="prerequisiteTitle" column="prerequisite_title"/>
+        <result property="isMandatory" column="is_mandatory"/>
+        <result property="minimumGrade" column="minimum_grade"/>
+        <result property="achievedGrade" column="achieved_grade"/>
+        <result property="enrollmentStatus" column="enrollment_status"/>
+        <result property="complianceStatus" column="compliance_status"/>
+        <result property="completionStatus" column="completion_status"/>
+    </resultMap>
+
+</mapper>
