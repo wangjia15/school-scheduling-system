@@ -201,13 +201,22 @@ import CardContent from '@/components/ui/CardContent.vue'
 import Button from '@/components/ui/Button.vue'
 import Badge from '@/components/ui/Badge.vue'
 import {
+  LayoutDashboard,
   Users,
   BookOpen,
   DoorOpen,
   AlertTriangle,
   RefreshCw,
   Calendar,
-  Download
+  Download,
+  Filter,
+  Plus,
+  BarChart3,
+  CheckCircle,
+  FileText,
+  RotateCcw,
+  Save,
+  Settings
 } from 'lucide-vue-next'
 
 const router = useRouter()
